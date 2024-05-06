@@ -1061,18 +1061,19 @@ uipc_stream_sbspace(struct sockbuf *sb)
 
 static int
 uipc_sosend_stream_or_seqpacket(struct socket *so, struct sockaddr *addr,
-    struct uio *uio, struct mbuf *m, struct mbuf *c, int flags,
+    struct uio *uio0, struct mbuf *m, struct mbuf *c, int flags,
     struct thread *td)
 {
 	struct unpcb *unp2;
 	struct socket *so2;
 	struct sockbuf *sb;
+	struct uio *uio;
 	struct mchain mc, cmc;
-	ssize_t resid, sent;
-	bool nonblock, eor;
+	size_t resid, sent;
+	bool nonblock, eor, aio;
 	int error;
 
-	MPASS((uio != NULL && m == NULL) || (m != NULL && uio == NULL));
+	MPASS((uio0 != NULL && m == NULL) || (m != NULL && uio0 == NULL));
 	MPASS(m == NULL || c == NULL);
 
 	if (__predict_false(flags & MSG_OOB))
@@ -1085,17 +1086,41 @@ uipc_sosend_stream_or_seqpacket(struct socket *so, struct sockaddr *addr,
 	mc = MCHAIN_INITIALIZER(&mc);
 	cmc = MCHAIN_INITIALIZER(&cmc);
 	sent = 0;
+	aio = false;
 
 	if (m == NULL) {
 		if (c != NULL && (error = unp_internalize(c, &cmc, td)))
 			goto out;
+		/*
+		 * This function may read more data from the uio than it would
+		 * then place on socket.  That would leave uio inconsistent
+		 * upon return.  Normally uio is allocated on the stack of the
+		 * syscall thread and we don't care about leaving it consistent.
+		 * However, aio(9) will allocate a uio as part of job and will
+		 * use it to track progress.  We detect aio(9) checking the
+		 * SB_AIO_RUNNING flag.  It is safe to check it without lock
+		 * cause it is set and cleared in the same taskqueue thread.
+		 *
+		 * This check can also produce a false positive: there is
+		 * aio(9) job and also there is a syscall we are serving now.
+		 * No sane software does that, it would leave to a mess in
+		 * the socket buffer, as aio(9) doesn't grab the I/O sx(9).
+		 * But syzkaller can create this mess.  For such false positive
+		 * our goal is just don't panic or leak memory.
+		 */
+		if (__predict_false(so->so_snd.sb_flags & SB_AIO_RUNNING)) {
+			uio = cloneuio(uio0);
+			aio = true;
+		} else {
+			uio = uio0;
+			resid = uio->uio_resid;
+		}
 		/*
 		 * Optimization for a case when our send fits into the receive
 		 * buffer - do the copyin before taking any locks, sized to our
 		 * send buffer.  Later copyins will also take into account
 		 * space in the peer's receive buffer.
 		 */
-		resid = uio->uio_resid;
 		error = mc_uiotomc(&mc, uio, so->so_snd.sb_hiwat, 0, M_WAITOK,
 		    eor ? M_EOR : 0);
 		if (__predict_false(error))
@@ -1242,14 +1267,16 @@ out4:
 out3:
 	SOCK_IO_SEND_UNLOCK(so);
 out2:
+	if (aio) {
+		freeuio(uio);
+		uioadvance(uio0, sent);
+	} else if (uio != NULL)
+		uio->uio_resid = resid - sent;
 	if (!mc_empty(&cmc))
 		unp_scan(mc_first(&cmc), unp_freerights);
 out:
 	mc_freem(&mc);
 	mc_freem(&cmc);
-
-	if (uio != NULL)
-		uio->uio_resid = resid - sent;
 
 	return (error);
 }
