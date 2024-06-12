@@ -48,6 +48,7 @@
 #define	CALLOUT_DFRMIGRATION	0x0040 /* callout in deferred migration mode */
 #define	CALLOUT_PROCESSED	0x0080 /* callout in wheel or processing list? */
 #define	CALLOUT_DIRECT 		0x0100 /* allow exec from hw int context */
+#define	CALLOUT_QQQ		0x0200
 
 #define	C_DIRECT_EXEC		0x0001 /* direct execution of callout */
 #define	C_PRELBITS		7

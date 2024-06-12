@@ -43,6 +43,7 @@
 #include <sys/systm.h>
 #include <sys/bus.h>
 #include <sys/callout.h>
+#include <sys/counter.h>	/* QQQ */
 #include <sys/domainset.h>
 #include <sys/file.h>
 #include <sys/interrupt.h>
@@ -109,6 +110,14 @@ SYSCTL_INT(_debug, OID_AUTO, to_avg_mpcalls_dir, CTLFLAG_RD, &avg_mpcalls_dir,
 static int ncallout;
 SYSCTL_INT(_kern, OID_AUTO, ncallout, CTLFLAG_RDTUN | CTLFLAG_NOFETCH, &ncallout, 0,
     "Number of entries in callwheel and size of timeout() preallocation");
+
+/* QQQ */
+static counter_u64_t trylock_failures;
+static counter_u64_t trylock_delayed;
+SYSCTL_COUNTER_U64(_kern, OID_AUTO, trylock_failures, CTLFLAG_RW,
+    &trylock_failures, "");
+SYSCTL_COUNTER_U64(_kern, OID_AUTO, trylock_delayed, CTLFLAG_RW,
+    &trylock_delayed, "");
 
 #ifdef	RSS
 static int pin_default_swi = 1;
@@ -304,6 +313,9 @@ callout_callwheel_init(void *dummy)
 		cc = CC_CPU(cpu);
 		callout_cpu_init(cc, cpu);
 	}
+	/* QQQ */
+	trylock_failures = counter_u64_alloc(M_WAITOK);
+	trylock_delayed = counter_u64_alloc(M_WAITOK);
 }
 SYSINIT(callwheel_init, SI_SUB_CPU, SI_ORDER_ANY, callout_callwheel_init, NULL);
 
@@ -680,7 +692,13 @@ softclock_call_cc(struct callout *c, struct callout_cpu *cc,
 				callout_cc_add(c, cc, cc->cc_lastscan,
 				    c->c_precision, c_func, c_arg,
 				    (direct) ? C_DIRECT_EXEC : 0);
+				c->c_iflags |= CALLOUT_QQQ;
+				counter_u64_add(trylock_failures, 1);
 				return;
+			}
+			if (c->c_iflags & CALLOUT_QQQ) {
+				c->c_iflags &= ~CALLOUT_QQQ;
+				counter_u64_add(trylock_delayed, 1);
 			}
 			CC_UNLOCK(cc);
 		} else {
