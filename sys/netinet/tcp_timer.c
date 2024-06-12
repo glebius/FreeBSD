@@ -952,32 +952,22 @@ tcp_timer_active(struct tcpcb *tp, tt_which which)
  *
  * Called when tcpcb moves to TCPS_CLOSED.
  *
- * XXXGL: unfortunately our callout(9) is not able to fully stop a locked
- * callout even when only two threads are involved: the callout itself and the
- * thread that does callout_stop().  See where softclock_call_cc() swaps the
- * callwheel lock to callout lock and then checks cc_exec_cancel().  This is
- * the race window.  If it happens, the tcp_timer_enter() won't be executed,
- * however pcb lock will be locked and released, hence we can't free memory.
- * Until callout(9) is improved, just keep retrying.  In my profiling I've seen
- * such event happening less than 1 time per hour with 20-30 Gbit/s of traffic.
+ * XXXGL: write up
  */
 void
 tcp_timer_stop(struct tcpcb *tp)
 {
-	struct inpcb *inp = tptoinpcb(tp);
+	int stopped __diagused;
 
-	INP_WLOCK_ASSERT(inp);
+	INP_WLOCK_ASSERT(tptoinpcb(tp));
 
 	if (curthread->td_pflags & TDP_INTCPCALLOUT) {
-		int stopped __diagused;
-
 		stopped = callout_stop(&tp->t_callout);
 		MPASS(stopped == 0);
 		for (tt_which i = 0; i < TT_N; i++)
 			tp->t_timers[i] = SBT_MAX;
-	} else while(__predict_false(callout_stop(&tp->t_callout) == 0)) {
-		INP_WUNLOCK(inp);
-		kern_yield(PRI_UNCHANGED);
-		INP_WLOCK(inp);
+	} else {
+		stopped = callout_stop(&tp->t_callout);
+		MPASS(stopped != 0);
 	}
 }
