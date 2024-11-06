@@ -38,9 +38,7 @@
 #include <linux/blkpg.h>
 #include <linux/msdos_fs.h>
 #include <linux/vfs_compat.h>
-#ifdef HAVE_LINUX_BLK_CGROUP_HEADER
 #include <linux/blk-cgroup.h>
-#endif
 
 /*
  * Linux 6.8.x uses a bdev_handle as an instance/refcount for an underlying
@@ -481,16 +479,6 @@ vdev_disk_close(vdev_t *v)
 	v->vdev_tsd = NULL;
 }
 
-static inline void
-vdev_submit_bio_impl(struct bio *bio)
-{
-#ifdef HAVE_1ARG_SUBMIT_BIO
-	(void) submit_bio(bio);
-#else
-	(void) submit_bio(bio_data_dir(bio), bio);
-#endif
-}
-
 /*
  * preempt_schedule_notrace is GPL-only which breaks the ZFS build, so
  * replace it with preempt_schedule under the following condition:
@@ -611,7 +599,7 @@ vdev_submit_bio(struct bio *bio)
 {
 	struct bio_list *bio_list = current->bio_list;
 	current->bio_list = NULL;
-	vdev_submit_bio_impl(bio);
+	(void) submit_bio(bio);
 	current->bio_list = bio_list;
 }
 
@@ -709,7 +697,7 @@ vbio_alloc(zio_t *zio, struct block_device *bdev, int flags)
 	return (vbio);
 }
 
-BIO_END_IO_PROTO(vbio_completion, bio, error);
+static void vbio_completion(struct bio *bio);
 
 static int
 vbio_add_page(vbio_t *vbio, struct page *page, uint_t size, uint_t offset)
@@ -805,7 +793,8 @@ vbio_submit(vbio_t *vbio, abd_t *abd, uint64_t size)
 }
 
 /* IO completion callback */
-BIO_END_IO_PROTO(vbio_completion, bio, error)
+static void
+vbio_completion(struct bio *bio)
 {
 	vbio_t *vbio = bio->bi_private;
 	zio_t *zio = vbio->vbio_zio;
@@ -813,15 +802,7 @@ BIO_END_IO_PROTO(vbio_completion, bio, error)
 	ASSERT(zio);
 
 	/* Capture and log any errors */
-#ifdef HAVE_1ARG_BIO_END_IO_T
-	zio->io_error = BIO_END_IO_ERROR(bio);
-#else
-	zio->io_error = 0;
-	if (error)
-		zio->io_error = -(error);
-	else if (!test_bit(BIO_UPTODATE, &bio->bi_flags))
-		zio->io_error = EIO;
-#endif
+	zio->io_error = bi_status_to_errno(bio->bi_status);
 	ASSERT3U(zio->io_error, >=, 0);
 
 	if (zio->io_error)
@@ -1072,19 +1053,13 @@ vdev_classic_dio_put(dio_request_t *dr)
 	}
 }
 
-BIO_END_IO_PROTO(vdev_classic_physio_completion, bio, error)
+static void
+vdev_classic_physio_completion(struct bio *bio)
 {
 	dio_request_t *dr = bio->bi_private;
 
 	if (dr->dr_error == 0) {
-#ifdef HAVE_1ARG_BIO_END_IO_T
-		dr->dr_error = BIO_END_IO_ERROR(bio);
-#else
-		if (error)
-			dr->dr_error = -(error);
-		else if (!test_bit(BIO_UPTODATE, &bio->bi_flags))
-			dr->dr_error = EIO;
-#endif
+		dr->dr_error = bi_status_to_errno(bio->bi_status);
 	}
 
 	/* Drop reference acquired by vdev_classic_physio */
@@ -1223,14 +1198,11 @@ retry:
 
 /* ========== */
 
-BIO_END_IO_PROTO(vdev_disk_io_flush_completion, bio, error)
+static void
+vdev_disk_io_flush_completion(struct bio *bio)
 {
 	zio_t *zio = bio->bi_private;
-#ifdef HAVE_1ARG_BIO_END_IO_T
-	zio->io_error = BIO_END_IO_ERROR(bio);
-#else
-	zio->io_error = -error;
-#endif
+	zio->io_error = bi_status_to_errno(bio->bi_status);
 
 	if (zio->io_error && (zio->io_error == EOPNOTSUPP))
 		zio->io_vd->vdev_nowritecache = B_TRUE;
@@ -1265,14 +1237,12 @@ vdev_disk_io_flush(struct block_device *bdev, zio_t *zio)
 	return (0);
 }
 
-BIO_END_IO_PROTO(vdev_disk_discard_end_io, bio, error)
+static void
+vdev_disk_discard_end_io(struct bio *bio)
 {
 	zio_t *zio = bio->bi_private;
-#ifdef HAVE_1ARG_BIO_END_IO_T
-	zio->io_error = BIO_END_IO_ERROR(bio);
-#else
-	zio->io_error = -error;
-#endif
+	zio->io_error = bi_status_to_errno(bio->bi_status);
+
 	bio_put(bio);
 	if (zio->io_error)
 		vdev_disk_error(zio);

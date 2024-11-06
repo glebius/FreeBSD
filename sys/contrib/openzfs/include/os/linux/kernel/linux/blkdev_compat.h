@@ -61,24 +61,12 @@ blk_queue_flag_clear(unsigned int flag, struct request_queue *q)
  * Setting the flush flags directly is no longer possible; flush flags are set
  * on the queue_limits structure and passed to blk_disk_alloc(). In this case
  * we remove this function entirely.
- *
- * 4.7 API,
- * The blk_queue_write_cache() interface has replaced blk_queue_flush()
- * interface.  However, the new interface is GPL-only thus we implement
- * our own trivial wrapper when the GPL-only version is detected.
- *
- * 2.6.36 - 4.6 API,
- * The blk_queue_flush() interface has replaced blk_queue_ordered()
- * interface.  However, while the old interface was available to all the
- * new one is GPL-only.   Thus if the GPL-only version is detected we
- * implement our own trivial helper.
  */
 #if !defined(HAVE_BLK_ALLOC_DISK_2ARG) || \
 	!defined(HAVE_BLKDEV_QUEUE_LIMITS_FEATURES)
 static inline void
 blk_queue_set_write_cache(struct request_queue *q, bool on)
 {
-#if defined(HAVE_BLK_QUEUE_WRITE_CACHE_GPL_ONLY)
 	if (on) {
 		blk_queue_flag_set(QUEUE_FLAG_WC, q);
 		blk_queue_flag_set(QUEUE_FLAG_FUA, q);
@@ -86,18 +74,6 @@ blk_queue_set_write_cache(struct request_queue *q, bool on)
 		blk_queue_flag_clear(QUEUE_FLAG_WC, q);
 		blk_queue_flag_clear(QUEUE_FLAG_FUA, q);
 	}
-#elif defined(HAVE_BLK_QUEUE_WRITE_CACHE)
-	blk_queue_write_cache(q, on, on);
-#elif defined(HAVE_BLK_QUEUE_FLUSH_GPL_ONLY)
-	if (on)
-		q->flush_flags |= REQ_FLUSH | REQ_FUA;
-	else
-		q->flush_flags &= ~(REQ_FLUSH | REQ_FUA);
-#elif defined(HAVE_BLK_QUEUE_FLUSH)
-	blk_queue_flush(q, on ? (REQ_FLUSH | REQ_FUA) : 0);
-#else
-#error "Unsupported kernel"
-#endif
 }
 #endif /* !HAVE_BLK_ALLOC_DISK_2ARG || !HAVE_BLKDEV_QUEUE_LIMITS_FEATURES */
 
@@ -143,7 +119,6 @@ blk_queue_set_read_ahead(struct request_queue *q, unsigned long ra_pages)
 #endif
 }
 
-#ifdef HAVE_BIO_BVEC_ITER
 #define	BIO_BI_SECTOR(bio)	(bio)->bi_iter.bi_sector
 #define	BIO_BI_SIZE(bio)	(bio)->bi_iter.bi_size
 #define	BIO_BI_IDX(bio)		(bio)->bi_iter.bi_idx
@@ -151,15 +126,6 @@ blk_queue_set_read_ahead(struct request_queue *q, unsigned long ra_pages)
 #define	bio_for_each_segment4(bv, bvp, b, i)	\
 	bio_for_each_segment((bv), (b), (i))
 typedef struct bvec_iter bvec_iterator_t;
-#else
-#define	BIO_BI_SECTOR(bio)	(bio)->bi_sector
-#define	BIO_BI_SIZE(bio)	(bio)->bi_size
-#define	BIO_BI_IDX(bio)		(bio)->bi_idx
-#define	BIO_BI_SKIP(bio)	(0)
-#define	bio_for_each_segment4(bv, bvp, b, i)	\
-	bio_for_each_segment((bvp), (b), (i))
-typedef int bvec_iterator_t;
-#endif
 
 static inline void
 bio_set_flags_failfast(struct block_device *bdev, int *flags, bool dev,
@@ -200,7 +166,6 @@ bio_set_flags_failfast(struct block_device *bdev, int *flags, bool dev,
 #define	DISK_NAME_LEN	32
 #endif /* DISK_NAME_LEN */
 
-#ifdef HAVE_BIO_BI_STATUS
 static inline int
 bi_status_to_errno(blk_status_t status)
 {
@@ -274,42 +239,6 @@ errno_to_bi_status(int error)
 		return (BLK_STS_IOERR);
 	}
 }
-#endif /* HAVE_BIO_BI_STATUS */
-
-/*
- * 4.3 API change
- * The bio_endio() prototype changed slightly.  These are helper
- * macro's to ensure the prototype and invocation are handled.
- */
-#ifdef HAVE_1ARG_BIO_END_IO_T
-#ifdef HAVE_BIO_BI_STATUS
-#define	BIO_END_IO_ERROR(bio)		bi_status_to_errno(bio->bi_status)
-#define	BIO_END_IO_PROTO(fn, x, z)	static void fn(struct bio *x)
-#define	BIO_END_IO(bio, error)		bio_set_bi_status(bio, error)
-static inline void
-bio_set_bi_status(struct bio *bio, int error)
-{
-	ASSERT3S(error, <=, 0);
-	bio->bi_status = errno_to_bi_status(-error);
-	bio_endio(bio);
-}
-#else
-#define	BIO_END_IO_ERROR(bio)		(-(bio->bi_error))
-#define	BIO_END_IO_PROTO(fn, x, z)	static void fn(struct bio *x)
-#define	BIO_END_IO(bio, error)		bio_set_bi_error(bio, error)
-static inline void
-bio_set_bi_error(struct bio *bio, int error)
-{
-	ASSERT3S(error, <=, 0);
-	bio->bi_error = error;
-	bio_endio(bio);
-}
-#endif /* HAVE_BIO_BI_STATUS */
-
-#else
-#define	BIO_END_IO_PROTO(fn, x, z)	static void fn(struct bio *x, int z)
-#define	BIO_END_IO(bio, error)		bio_endio(bio, error);
-#endif /* HAVE_1ARG_BIO_END_IO_T */
 
 /*
  * 5.15 MACRO,
@@ -447,55 +376,23 @@ vdev_lookup_bdev(const char *path, dev_t *dev)
 static inline void
 bio_set_op_attrs(struct bio *bio, unsigned rw, unsigned flags)
 {
-#if defined(HAVE_BIO_BI_OPF)
 	bio->bi_opf = rw | flags;
-#else
-	bio->bi_rw |= rw | flags;
-#endif /* HAVE_BIO_BI_OPF */
 }
 #endif
 
 /*
  * bio_set_flush - Set the appropriate flags in a bio to guarantee
  * data are on non-volatile media on completion.
- *
- * 2.6.37 - 4.8 API,
- *   Introduce WRITE_FLUSH, WRITE_FUA, and WRITE_FLUSH_FUA flags as a
- *   replacement for WRITE_BARRIER to allow expressing richer semantics
- *   to the block layer.  It's up to the block layer to implement the
- *   semantics correctly. Use the WRITE_FLUSH_FUA flag combination.
- *
- * 4.8 - 4.9 API,
- *   REQ_FLUSH was renamed to REQ_PREFLUSH.  For consistency with previous
- *   OpenZFS releases, prefer the WRITE_FLUSH_FUA flag set if it's available.
- *
- * 4.10 API,
- *   The read/write flags and their modifiers, including WRITE_FLUSH,
- *   WRITE_FUA and WRITE_FLUSH_FUA were removed from fs.h in
- *   torvalds/linux@70fd7614 and replaced by direct flag modification
- *   of the REQ_ flags in bio->bi_opf.  Use REQ_PREFLUSH.
  */
 static inline void
 bio_set_flush(struct bio *bio)
 {
-#if defined(HAVE_REQ_PREFLUSH)	/* >= 4.10 */
 	bio_set_op_attrs(bio, 0, REQ_PREFLUSH | REQ_OP_WRITE);
-#elif defined(WRITE_FLUSH_FUA)	/* >= 2.6.37 and <= 4.9 */
-	bio_set_op_attrs(bio, 0, WRITE_FLUSH_FUA);
-#else
-#error	"Allowing the build will cause bio_set_flush requests to be ignored."
-#endif
 }
 
 /*
  * 4.8 API,
  *   REQ_OP_FLUSH
- *
- * 4.8-rc0 - 4.8-rc1,
- *   REQ_PREFLUSH
- *
- * 2.6.36 - 4.7 API,
- *   REQ_FLUSH
  *
  * in all cases but may have a performance impact for some kernels.  It
  * has the advantage of minimizing kernel specific changes in the zvol code.
@@ -504,44 +401,22 @@ bio_set_flush(struct bio *bio)
 static inline boolean_t
 bio_is_flush(struct bio *bio)
 {
-#if defined(HAVE_REQ_OP_FLUSH) && defined(HAVE_BIO_BI_OPF)
-	return ((bio_op(bio) == REQ_OP_FLUSH) || (bio->bi_opf & REQ_PREFLUSH));
-#elif defined(HAVE_REQ_PREFLUSH) && defined(HAVE_BIO_BI_OPF)
-	return (bio->bi_opf & REQ_PREFLUSH);
-#elif defined(HAVE_REQ_PREFLUSH) && !defined(HAVE_BIO_BI_OPF)
-	return (bio->bi_rw & REQ_PREFLUSH);
-#elif defined(HAVE_REQ_FLUSH)
-	return (bio->bi_rw & REQ_FLUSH);
-#else
-#error	"Unsupported kernel"
-#endif
+	return (bio_op(bio) == REQ_OP_FLUSH);
 }
 
 /*
  * 4.8 API,
  *   REQ_FUA flag moved to bio->bi_opf
- *
- * 2.6.x - 4.7 API,
- *   REQ_FUA
  */
 static inline boolean_t
 bio_is_fua(struct bio *bio)
 {
-#if defined(HAVE_BIO_BI_OPF)
 	return (bio->bi_opf & REQ_FUA);
-#elif defined(REQ_FUA)
-	return (bio->bi_rw & REQ_FUA);
-#else
-#error	"Allowing the build will cause fua requests to be ignored."
-#endif
 }
 
 /*
  * 4.8 API,
  *   REQ_OP_DISCARD
- *
- * 2.6.36 - 4.7 API,
- *   REQ_DISCARD
  *
  * In all cases the normal I/O path is used for discards.  The only
  * difference is how the kernel tags individual I/Os as discards.
@@ -549,32 +424,17 @@ bio_is_fua(struct bio *bio)
 static inline boolean_t
 bio_is_discard(struct bio *bio)
 {
-#if defined(HAVE_REQ_OP_DISCARD)
 	return (bio_op(bio) == REQ_OP_DISCARD);
-#elif defined(HAVE_REQ_DISCARD)
-	return (bio->bi_rw & REQ_DISCARD);
-#else
-#error "Unsupported kernel"
-#endif
 }
 
 /*
  * 4.8 API,
  *   REQ_OP_SECURE_ERASE
- *
- * 2.6.36 - 4.7 API,
- *   REQ_SECURE
  */
 static inline boolean_t
 bio_is_secure_erase(struct bio *bio)
 {
-#if defined(HAVE_REQ_OP_SECURE_ERASE)
 	return (bio_op(bio) == REQ_OP_SECURE_ERASE);
-#elif defined(REQ_SECURE)
-	return (bio->bi_rw & REQ_SECURE);
-#else
-	return (0);
-#endif
 }
 
 /*
@@ -615,9 +475,6 @@ bdev_discard_supported(struct block_device *bdev)
  *
  * 4.8 API,
  *   blk_queue_secure_erase()
- *
- * 2.6.36 - 4.7 API,
- *   blk_queue_secdiscard()
  */
 static inline boolean_t
 bdev_secure_discard_supported(struct block_device *bdev)
@@ -626,8 +483,6 @@ bdev_secure_discard_supported(struct block_device *bdev)
 	return (!!bdev_max_secure_erase_sectors(bdev));
 #elif defined(HAVE_BLK_QUEUE_SECURE_ERASE)
 	return (!!blk_queue_secure_erase(bdev_get_queue(bdev)));
-#elif defined(HAVE_BLK_QUEUE_SECDISCARD)
-	return (!!blk_queue_secdiscard(bdev_get_queue(bdev)));
 #else
 #error "Unsupported kernel"
 #endif

@@ -415,21 +415,12 @@ zfs_inode_set_ops(zfsvfs_t *zfsvfs, struct inode *ip)
 	switch (ip->i_mode & S_IFMT) {
 	case S_IFREG:
 		ip->i_op = &zpl_inode_operations;
-#ifdef HAVE_VFS_FILE_OPERATIONS_EXTEND
-		ip->i_fop = &zpl_file_operations.kabi_fops;
-#else
 		ip->i_fop = &zpl_file_operations;
-#endif
 		ip->i_mapping->a_ops = &zpl_address_space_operations;
 		break;
 
 	case S_IFDIR:
-#ifdef HAVE_RENAME2_OPERATIONS_WRAPPER
-		ip->i_flags |= S_IOPS_WRAPPER;
-		ip->i_op = &zpl_dir_inode_operations.ops;
-#else
 		ip->i_op = &zpl_dir_inode_operations;
-#endif
 		ip->i_fop = &zpl_dir_file_operations;
 		ITOZ(ip)->z_zn_prefetch = B_TRUE;
 		break;
@@ -459,11 +450,7 @@ zfs_inode_set_ops(zfsvfs_t *zfsvfs, struct inode *ip)
 		/* Assume the inode is a file and attempt to continue */
 		ip->i_mode = S_IFREG | 0644;
 		ip->i_op = &zpl_inode_operations;
-#ifdef HAVE_VFS_FILE_OPERATIONS_EXTEND
-		ip->i_fop = &zpl_file_operations.kabi_fops;
-#else
 		ip->i_fop = &zpl_file_operations;
-#endif
 		ip->i_mapping->a_ops = &zpl_address_space_operations;
 		break;
 	}
@@ -476,7 +463,6 @@ zfs_set_inode_flags(znode_t *zp, struct inode *ip)
 	 * Linux and Solaris have different sets of file attributes, so we
 	 * restrict this conversion to the intersection of the two.
 	 */
-#ifdef HAVE_INODE_SET_FLAGS
 	unsigned int flags = 0;
 	if (zp->z_pflags & ZFS_IMMUTABLE)
 		flags |= S_IMMUTABLE;
@@ -484,17 +470,6 @@ zfs_set_inode_flags(znode_t *zp, struct inode *ip)
 		flags |= S_APPEND;
 
 	inode_set_flags(ip, flags, S_IMMUTABLE|S_APPEND);
-#else
-	if (zp->z_pflags & ZFS_IMMUTABLE)
-		ip->i_flags |= S_IMMUTABLE;
-	else
-		ip->i_flags &= ~S_IMMUTABLE;
-
-	if (zp->z_pflags & ZFS_APPENDONLY)
-		ip->i_flags |= S_APPEND;
-	else
-		ip->i_flags &= ~S_APPEND;
-#endif
 }
 
 /*
@@ -560,9 +535,6 @@ zfs_znode_alloc(zfsvfs_t *zfsvfs, dmu_buf_t *db, int blksz,
 	ASSERT3P(zp->z_xattr_cached, ==, NULL);
 	zp->z_unlinked = B_FALSE;
 	zp->z_atime_dirty = B_FALSE;
-#if !defined(HAVE_FILEMAP_RANGE_HAS_PAGE)
-	zp->z_is_mapped = B_FALSE;
-#endif
 	zp->z_is_ctldir = B_FALSE;
 	zp->z_suspended = B_FALSE;
 	zp->z_sa_hdl = NULL;
@@ -1391,12 +1363,6 @@ zfs_zinactive(znode_t *zp)
 	zfs_znode_hold_exit(zfsvfs, zh);
 }
 
-#if defined(HAVE_INODE_TIMESPEC64_TIMES)
-#define	zfs_compare_timespec timespec64_compare
-#else
-#define	zfs_compare_timespec timespec_compare
-#endif
-
 /*
  * Determine whether the znode's atime must be updated.  The logic mostly
  * duplicates the Linux kernel's relatime_need_update() functionality.
@@ -1416,11 +1382,11 @@ zfs_relatime_need_update(const struct inode *ip)
 	 * has passed since the last update of atime.
 	 */
 	tmp_ts = zpl_inode_get_mtime(ip);
-	if (zfs_compare_timespec(&tmp_ts, &tmp_atime) >= 0)
+	if (timespec64_compare(&tmp_ts, &tmp_atime) >= 0)
 		return (B_TRUE);
 
 	tmp_ts = zpl_inode_get_ctime(ip);
-	if (zfs_compare_timespec(&tmp_ts, &tmp_atime) >= 0)
+	if (timespec64_compare(&tmp_ts, &tmp_atime) >= 0)
 		return (B_TRUE);
 
 	if ((hrtime_t)now.tv_sec - (hrtime_t)tmp_atime.tv_sec >= 24*60*60)
