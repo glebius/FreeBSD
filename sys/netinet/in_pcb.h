@@ -321,10 +321,14 @@ CK_LIST_HEAD(inpcblbgrouphead, inpcblbgroup);
  * Almost all fields of struct inpcb are static after creation or protected by
  * a per-inpcb rwlock, inp_lock.
  *
- * A inpcb database is indexed by addresses/ports hash as well as list of
- * all pcbs that belong to a certain proto. Database lookups or list traversals
- * are be performed inside SMR section. Once desired PCB is found its own
- * lock is to be obtained and SMR section exited.
+ * A inpcb database consist of two hash tables: one for connected pcbs and the
+ * other to wildcard-bound pcbs.  The newborn pcbs reside on the unconnected
+ * list.  Although a pcb can be on either of these three lists, we can't share
+ * the linkage pointer due to its CK-nature.  The only thing that can be
+ * unionized is the load-balance table and exact hash, as a pcb can never
+ * participate in both tables through its entire life time.  Database lookups
+ * or list traversals are be performed inside SMR section.  Once desired PCB is
+ * found its own lock is to be obtained and SMR section exited.
  *
  * Key:
  * (c) - Constant after initialization
@@ -352,10 +356,11 @@ struct m_snd_tag;
 struct inpcb {
 	/* Cache line #1 (amd64) */
 	union {
-		CK_LIST_ENTRY(inpcb) inp_hash_exact;	/* hash table linkage */
-		LIST_ENTRY(inpcb) inp_lbgroup_list;	/* lb group list */
+		CK_LIST_ENTRY(inpcb)	inp_hash_exact;
+		LIST_ENTRY(inpcb)	inp_lbgroup_list;
 	};
-	CK_LIST_ENTRY(inpcb) inp_hash_wild;	/* hash table linkage */
+	CK_LIST_ENTRY(inpcb)	inp_hash_wild;
+	CK_LIST_ENTRY(inpcb)	inp_unconn_list;
 	struct rwlock	inp_lock;
 	/* Cache line #2 (amd64) */
 #define	inp_start_zero	inp_refcount
@@ -412,7 +417,6 @@ struct inpcb {
 		struct route inp_route;
 		struct route_in6 inp_route6;
 	};
-	CK_LIST_ENTRY(inpcb) inp_list;	/* (r:e/w:p) all PCBs for proto */
 };
 
 #define	inp_vnet	inp_pcbinfo->ipi_vnet
@@ -431,7 +435,6 @@ struct inpcb {
  * (h) Locked by ipi_hash_lock
  */
 struct inpcbinfo {
-	struct inpcbhead	 ipi_listhead;		/* (r:e/w:h) */
 	u_int			 ipi_count;		/* (h) */
 
 	/*
@@ -460,6 +463,7 @@ struct inpcbinfo {
 	 * address, and "wild" holds the rest.
 	 */
 	struct mtx		 ipi_hash_lock;
+	struct inpcbhead	 ipi_list_unconn;	/* (r:e/w:h) */
 	struct inpcbhead 	*ipi_hash_exact;	/* (r:e/w:h) */
 	struct inpcbhead 	*ipi_hash_wild;		/* (r:e/w:h) */
 	u_long			 ipi_hashmask;		/* (c) */
@@ -671,13 +675,20 @@ int	sysctl_setsockopt(SYSCTL_HANDLER_ARGS, struct inpcbinfo *pcbinfo,
 	    int (*ctloutput_set)(struct inpcb *, struct sockopt *));
 #endif
 
+/*
+ * struct inpcb_iterator is located on the stack of a function that uses
+ * inp_next().  The const members are set by the caller with INP_ITERATOR().
+ * (c) - caller
+ * (n) - inp_next()
+ */
 typedef bool inp_match_t(const struct inpcb *, void *);
 struct inpcb_iterator {
 	const struct inpcbinfo	*ipi;
-	struct inpcb		*inp;
+	struct inpcb		*inp;	/* c:r, n:w */
 	inp_match_t		*match;
 	void			*ctx;
-	int			hash;
+	int			hash;	/* c:w, n:rw */
+	int			mode;	/* n:rw */
 #define	INP_ALL_LIST		-1
 	const inp_lookup_t	lock;
 };

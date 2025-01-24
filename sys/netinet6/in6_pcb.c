@@ -511,7 +511,9 @@ in6_pcbdisconnect(struct inpcb *inp)
 	KASSERT(inp->inp_smr == SMR_SEQ_INVALID,
 	    ("%s: inp %p was already disconnected", __func__, inp));
 
-	in_pcbremhash_locked(inp);
+	in_pcbremhash(inp);
+	CK_LIST_INSERT_HEAD(&inp->inp_pcbinfo->ipi_list_unconn, inp,
+	    inp_unconn_list);
 
 	/* See the comment in in_pcbinshash(). */
 	if (!(inp->inp_socket->so_proto->pr_flags & PR_CONNREQUIRED)) {
