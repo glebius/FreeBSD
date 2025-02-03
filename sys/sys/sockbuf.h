@@ -139,6 +139,10 @@ struct sockbuf {
 		struct {
 			STAILQ_HEAD(, mbuf)	uxst_mbq;
 			struct mbuf		*uxst_fnrdy;
+			struct socket		*uxst_peer;
+			u_int			uxst_flags;
+#define	UXST_PEER_AIO	0x1
+#define	UXST_PEER_SEL	0x2
 		};
 		/*
 		 * PF_UNIX/SOCK_DGRAM

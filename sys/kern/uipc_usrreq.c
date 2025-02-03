@@ -73,6 +73,7 @@
 #include <sys/mount.h>
 #include <sys/mutex.h>
 #include <sys/namei.h>
+#include <sys/poll.h>
 #include <sys/proc.h>
 #include <sys/protosw.h>
 #include <sys/queue.h>
@@ -295,7 +296,7 @@ static int	unp_connect(struct socket *, struct sockaddr *,
 		    struct thread *);
 static int	unp_connectat(int, struct socket *, struct sockaddr *,
 		    struct thread *, bool);
-static void	unp_connect2(struct socket *so, struct socket *so2);
+static void	unp_connect2(struct socket *, struct socket *, bool);
 static void	unp_disconnect(struct unpcb *unp, struct unpcb *unp2);
 static void	unp_dispose(struct socket *so);
 static void	unp_shutdown(struct unpcb *);
@@ -311,6 +312,10 @@ static int	unp_externalize(struct mbuf *, struct mbuf **, int);
 static int	unp_externalize_fp(struct file *);
 static void	unp_addsockcred(struct thread *, struct mchain *, int);
 static void	unp_process_defers(void * __unused, int);
+
+static void	uipc_wrknl_lock(void *);
+static void	uipc_wrknl_unlock(void *);
+static void	uipc_wrknl_assert_lock(void *, int);
 
 static void
 unp_pcb_hold(struct unpcb *unp)
@@ -504,6 +509,11 @@ uipc_attach(struct socket *so, int proto, struct thread *td)
 		sendspace = unpsp_sendspace;
 		recvspace = unpsp_recvspace;
 common:
+		/* XXXGL */
+		mtx_destroy(&so->so_rcv_mtx);
+		mtx_init(&so->so_rcv_mtx, "so_rcv", NULL, MTX_DEF | MTX_DUPOK);
+		knlist_init(&so->so_wrsel.si_note, so, uipc_wrknl_lock,
+		    uipc_wrknl_unlock, uipc_wrknl_assert_lock);
 		STAILQ_INIT(&so->so_rcv.uxst_mbq);
 		break;
 	default:
@@ -775,7 +785,7 @@ uipc_connect2(struct socket *so1, struct socket *so2)
 	unp2 = so2->so_pcb;
 	KASSERT(unp2 != NULL, ("uipc_connect2: unp2 == NULL"));
 	unp_pcb_lock_pair(unp, unp2);
-	unp_connect2(so1, so2);
+	unp_connect2(so1, so2, false);
 	unp_pcb_unlock_pair(unp, unp2);
 
 	return (0);
@@ -860,7 +870,8 @@ uipc_detach(struct socket *so)
 	switch (so->so_type) {
 	case SOCK_STREAM:
 	case SOCK_SEQPACKET:
-		MPASS(SOLISTENING(so) || STAILQ_EMPTY(&so->so_rcv.uxst_mbq));
+		MPASS(SOLISTENING(so) || (STAILQ_EMPTY(&so->so_rcv.uxst_mbq) &&
+		    so->so_rcv.uxst_peer == NULL));
 		break;
 	case SOCK_DGRAM:
 		/*
@@ -1016,6 +1027,7 @@ uipc_stream_sbcheck(struct sockbuf *sb)
 	MPASS(dccc == sb->sb_ccc);
 	MPASS(dctl == sb->sb_ctl);
 	MPASS(dmbcnt == sb->sb_mbcnt);
+	(void)STAILQ_EMPTY(&sb->uxst_mbq);
 }
 #define	UIPC_STREAM_SBCHECK(sb)	uipc_stream_sbcheck(sb)
 #else
@@ -1026,7 +1038,9 @@ uipc_stream_sbcheck(struct sockbuf *sb)
  * uipc_stream_sbspace() returns how much a writer can send, limited by char
  * count or mbuf memory use, whatever ends first.
  *
- * XXXGL: sb_mbcnt may overcommit sb_mbmax in case if previous write observed
+ * An obvious and legitimate reason for a socket having more data than allowed,
+ * is lowering the limit with setsockopt(SO_RCVBUF) on already full buffer.
+ * Also, sb_mbcnt may overcommit sb_mbmax in case if previous write observed
  * 'space < mbspace', but mchain allocated to hold 'space' bytes of data ended
  * up with 'mc_mlen > mbspace'.  A typical scenario would be a full buffer with
  * writer trying to push in a large write, and a slow reader, that reads just
@@ -1042,8 +1056,10 @@ uipc_stream_sbspace(struct sockbuf *sb)
 {
 	u_int space, mbspace;
 
-	MPASS(sb->sb_hiwat >= sb->sb_ccc + sb->sb_ctl);
-	space = sb->sb_hiwat - sb->sb_ccc - sb->sb_ctl;
+	if (__predict_true(sb->sb_hiwat >= sb->sb_ccc + sb->sb_ctl))
+		space = sb->sb_hiwat - sb->sb_ccc - sb->sb_ctl;
+	else
+		return (0);
 	if (__predict_true(sb->sb_mbmax >= sb->sb_mbcnt))
 		mbspace = sb->sb_mbmax - sb->sb_mbcnt;
 	else
@@ -1054,18 +1070,19 @@ uipc_stream_sbspace(struct sockbuf *sb)
 
 static int
 uipc_sosend_stream_or_seqpacket(struct socket *so, struct sockaddr *addr,
-    struct uio *uio, struct mbuf *m, struct mbuf *c, int flags,
+    struct uio *uio0, struct mbuf *m, struct mbuf *c, int flags,
     struct thread *td)
 {
 	struct unpcb *unp2;
 	struct socket *so2;
 	struct sockbuf *sb;
+	struct uio *uio;
 	struct mchain mc, cmc;
-	ssize_t resid, sent;
-	bool nonblock, eor;
+	size_t resid, sent;
+	bool nonblock, eor, aio;
 	int error;
 
-	MPASS((uio != NULL && m == NULL) || (m != NULL && uio == NULL));
+	MPASS((uio0 != NULL && m == NULL) || (m != NULL && uio0 == NULL));
 	MPASS(m == NULL || c == NULL);
 
 	if (__predict_false(flags & MSG_OOB))
@@ -1078,17 +1095,41 @@ uipc_sosend_stream_or_seqpacket(struct socket *so, struct sockaddr *addr,
 	mc = MCHAIN_INITIALIZER(&mc);
 	cmc = MCHAIN_INITIALIZER(&cmc);
 	sent = 0;
+	aio = false;
 
 	if (m == NULL) {
 		if (c != NULL && (error = unp_internalize(c, &cmc, td)))
 			goto out;
+		/*
+		 * This function may read more data from the uio than it would
+		 * then place on socket.  That would leave uio inconsistent
+		 * upon return.  Normally uio is allocated on the stack of the
+		 * syscall thread and we don't care about leaving it consistent.
+		 * However, aio(9) will allocate a uio as part of job and will
+		 * use it to track progress.  We detect aio(9) checking the
+		 * SB_AIO_RUNNING flag.  It is safe to check it without lock
+		 * cause it is set and cleared in the same taskqueue thread.
+		 *
+		 * This check can also produce a false positive: there is
+		 * aio(9) job and also there is a syscall we are serving now.
+		 * No sane software does that, it would leave to a mess in
+		 * the socket buffer, as aio(9) doesn't grab the I/O sx(9).
+		 * But syzkaller can create this mess.  For such false positive
+		 * our goal is just don't panic or leak memory.
+		 */
+		if (__predict_false(so->so_snd.sb_flags & SB_AIO_RUNNING)) {
+			uio = cloneuio(uio0);
+			aio = true;
+		} else {
+			uio = uio0;
+			resid = uio->uio_resid;
+		}
 		/*
 		 * Optimization for a case when our send fits into the receive
 		 * buffer - do the copyin before taking any locks, sized to our
 		 * send buffer.  Later copyins will also take into account
 		 * space in the peer's receive buffer.
 		 */
-		resid = uio->uio_resid;
 		error = mc_uiotomc(&mc, uio, so->so_snd.sb_hiwat, 0, M_WAITOK,
 		    eor ? M_EOR : 0);
 		if (__predict_false(error))
@@ -1149,7 +1190,15 @@ restart:
 		space = uipc_stream_sbspace(sb);
 		if (space < sb->sb_lowat || space < cmc.mc_len) {
 			if (nonblock) {
+				if (aio)
+					sb->uxst_flags |= UXST_PEER_AIO;
 				SOCK_RECVBUF_UNLOCK(so2);
+				if (aio) {
+					SOCK_SENDBUF_LOCK(so);
+					so->so_snd.sb_ccc =
+					    so->so_snd.sb_hiwat - space;
+					SOCK_SENDBUF_UNLOCK(so);
+				}
 				error = EWOULDBLOCK;
 				goto out4;
 			}
@@ -1235,14 +1284,16 @@ out4:
 out3:
 	SOCK_IO_SEND_UNLOCK(so);
 out2:
+	if (aio) {
+		freeuio(uio);
+		uioadvance(uio0, sent);
+	} else if (uio != NULL)
+		uio->uio_resid = resid - sent;
 	if (!mc_empty(&cmc))
 		unp_scan(mc_first(&cmc), unp_freerights);
 out:
 	mc_freem(&mc);
 	mc_freem(&cmc);
-
-	if (uio != NULL)
-		uio->uio_resid = resid - sent;
 
 	return (error);
 }
@@ -1389,8 +1440,53 @@ restart:
 		MPASS(sb->sb_mbcnt >= mbcnt);
 		sb->sb_mbcnt -= mbcnt;
 		UIPC_STREAM_SBCHECK(sb);
-		/* Mind the name.  We are waking writer here, not reader. */
-		sorwakeup_locked(so);
+		/*
+		 * QQQ rewrite...
+		 * With a normal use, uipc_sosend_stream_or_seqpacket() is
+		 * sleeping on our receive buffer, thus we are using
+		 * sor[ead]wakeup, actually waking up a writer.
+		 * With aio(9) use, the aio machinery uses peer's send buffer
+		 * to sleep, so we need to workaround this.
+		 */
+		if (__predict_true(sb->uxst_peer != NULL)) {
+			struct selinfo *sel = &sb->uxst_peer->so_wrsel;
+			struct unpcb *unp2;
+			bool aio;
+
+			if ((aio = sb->uxst_flags & UXST_PEER_AIO))
+				sb->uxst_flags &= ~UXST_PEER_AIO;
+			if (sb->uxst_flags & UXST_PEER_SEL) {
+				selwakeuppri(sel, PSOCK);
+				/*
+				 * XXXGL: sowakeup() does SEL_WAITING() without
+				 * locks.
+				 */
+				if (!SEL_WAITING(sel))
+					sb->uxst_flags &= ~UXST_PEER_SEL;
+			}
+			if (sb->sb_flags & SB_WAIT) {
+				sb->sb_flags &= ~SB_WAIT;
+				wakeup(&sb->sb_acc);
+			}
+			KNOTE_LOCKED(&sel->si_note, 0);
+			SOCK_RECVBUF_UNLOCK(so);
+			/*
+			 * XXXGL: need to go through uipc_lock_peer() after
+			 * the receive buffer lock dropped, it was protecting
+			 * us from unp_soisdisconnected().  The aio workarounds
+			 * should be refactored to the aio(4) side.
+			 */
+			if (aio && uipc_lock_peer(so, &unp2) == 0) {
+				struct socket *so2 = unp2->unp_socket;
+
+				SOCK_SENDBUF_LOCK(so2);
+				so2->so_snd.sb_ccc -= datalen;
+				sowakeup_aio(so2, SO_SND);
+				SOCK_SENDBUF_UNLOCK(so2);
+				UNP_PCB_UNLOCK(unp2);
+			}
+		} else
+			SOCK_RECVBUF_UNLOCK(so);
 	} else
 		SOCK_RECVBUF_UNLOCK(so);
 
@@ -1401,7 +1497,8 @@ restart:
 			/*
 			 * unp_externalize() failure must abort entire read(2).
 			 * Such failure should also free the problematic
-			 * control, so that socket is not left in a state
+			 * control, but link back the remaining data to the head
+			 * of the buffer, so that socket is not left in a state
 			 * where it can't progress forward with reading.
 			 * Probability of such a failure is really low, so it
 			 * is fine that we need to perform pretty complex
@@ -1414,17 +1511,35 @@ restart:
 			control = STAILQ_NEXT(c, m_stailq);
 			STAILQ_NEXT(c, m_stailq) = NULL;
 			error = unp_externalize(c, controlp, flags);
-			if (__predict_false(error)) {
+			if (__predict_false(error && control != NULL)) {
+				struct mchain cmc;
+
+				mc_init_m(&cmc, control);
+
 				SOCK_RECVBUF_LOCK(so);
-				UIPC_STREAM_SBCHECK(sb);
 				MPASS(!(sb->sb_state & SBS_CANTRCVMORE));
+
+				if (__predict_false(cmc.mc_len + sb->sb_ccc +
+				    sb->sb_ctl > sb->sb_hiwat)) {
+					/*
+					 * Too bad, while unp_externalize() was
+					 * failing, the other side had filled
+					 * the buffer and we can't prepend data
+					 * back. Losing data!
+					 */
+					SOCK_RECVBUF_UNLOCK(so);
+					SOCK_IO_RECV_UNLOCK(so);
+					unp_scan(mc_first(&cmc),
+					    unp_freerights);
+					mc_freem(&cmc);
+					return (error);
+				}
+
+				UIPC_STREAM_SBCHECK(sb);
 				/* XXXGL: STAILQ_PREPEND */
-				if (STAILQ_EMPTY(&sb->uxst_mbq) &&
-				    control != NULL)
-					STAILQ_INSERT_HEAD(&sb->uxst_mbq,
-					    control, m_stailq);
-				else
-					STAILQ_FIRST(&sb->uxst_mbq) = control;
+				STAILQ_CONCAT(&cmc.mc_q, &sb->uxst_mbq);
+				STAILQ_SWAP(&cmc.mc_q, &sb->uxst_mbq, mbuf);
+
 				sb->sb_ctl = sb->sb_acc = sb->sb_ccc =
 				    sb->sb_mbcnt = 0;
 				STAILQ_FOREACH(m, &sb->uxst_mbq, m_stailq) {
@@ -1505,6 +1620,230 @@ restart:
 
 	uio->uio_td->td_ru.ru_msgrcv++;
 
+	return (0);
+}
+
+/* XXXGL: ignoring POLLINIGNEOF */
+static int
+uipc_sopoll_stream_or_seqpacket(struct socket *so, int events,
+    struct thread *td)
+{
+	struct unpcb *unp = sotounpcb(so);
+	int revents;
+
+	UNP_PCB_LOCK(unp);
+	if (SOLISTENING(so)) {
+		/* The above check is safe, since conversion to listening uses
+		 * both protocol and socket lock.
+		 */
+		SOCK_LOCK(so);
+		if (!(events & (POLLIN | POLLRDNORM)))
+			revents = 0;
+		else if (!TAILQ_EMPTY(&so->sol_comp))
+			revents = events & (POLLIN | POLLRDNORM);
+		else if (so->so_error)
+			revents = (events & (POLLIN | POLLRDNORM)) | POLLHUP;
+		else {
+			selrecord(td, &so->so_rdsel);
+			revents = 0;
+		}
+		SOCK_UNLOCK(so);
+	} else {
+		struct unpcb *unp2;
+
+		if (so->so_state & SS_ISDISCONNECTED)
+			revents = POLLHUP;
+		else
+			revents = 0;
+		if (events & (POLLIN | POLLRDNORM | POLLRDHUP)) {
+			SOCK_RECVBUF_LOCK(so);
+			if (sbavail(&so->so_rcv) >= so->so_rcv.sb_lowat ||
+			    so->so_error || so->so_rerror)
+				revents |= events & (POLLIN | POLLRDNORM);
+			if (so->so_rcv.sb_state & SBS_CANTRCVMORE)
+				revents |= events & POLLRDHUP;
+			if (!(revents & (POLLIN | POLLRDNORM | POLLRDHUP))) {
+				selrecord(td, &so->so_rdsel);
+				so->so_rcv.sb_flags |= SB_SEL;
+			}
+			SOCK_RECVBUF_UNLOCK(so);
+		}
+		if (events & (POLLOUT | POLLWRNORM)) {
+			if ((unp2 = unp_pcb_lock_peer(unp))) {
+				struct socket *so2 = unp2->unp_socket;
+				struct sockbuf *sb = &so2->so_rcv;
+
+				SOCK_RECVBUF_LOCK(so2);
+				if (uipc_stream_sbspace(sb) >= sb->sb_lowat)
+					revents |= events &
+					    (POLLOUT | POLLWRNORM);
+				if (sb->sb_state & SBS_CANTRCVMORE)
+					revents |= POLLHUP;
+				if (!(revents & (POLLOUT | POLLWRNORM)))
+					so2->so_rcv.uxst_flags |= UXST_PEER_SEL;
+				SOCK_RECVBUF_UNLOCK(so2);
+				UNP_PCB_UNLOCK(unp2);
+			}
+			if (!(revents & (POLLOUT | POLLWRNORM)))
+				selrecord(td, &so->so_wrsel);
+		}
+	}
+	UNP_PCB_UNLOCK(unp);
+	return (revents);
+}
+
+static void
+uipc_wrknl_lock(void *arg)
+{
+	struct socket *so = arg;
+	struct unpcb *unp = sotounpcb(so);
+
+retry:
+	if (SOLISTENING(so)) {
+		SOLISTEN_LOCK(so);
+	} else {
+		UNP_PCB_LOCK(unp);
+		if (__predict_false(SOLISTENING(so))) {
+			UNP_PCB_UNLOCK(unp);
+			goto retry;
+		}
+		if (so->so_rcv.uxst_peer != NULL)
+			SOCK_RECVBUF_LOCK(so->so_rcv.uxst_peer);
+	}
+}
+
+static void
+uipc_wrknl_unlock(void *arg)
+{
+	struct socket *so = arg;
+	struct unpcb *unp = sotounpcb(so);
+
+	if (SOLISTENING(so))
+		SOLISTEN_UNLOCK(so);
+	else {
+		if (so->so_rcv.uxst_peer != NULL)
+			SOCK_RECVBUF_UNLOCK(so->so_rcv.uxst_peer);
+		UNP_PCB_UNLOCK(unp);
+	}
+}
+
+static void
+uipc_wrknl_assert_lock(void *arg, int what)
+{
+	struct socket *so = arg;
+
+	if (SOLISTENING(so)) {
+		if (what == LA_LOCKED)
+			SOLISTEN_LOCK_ASSERT(so);
+		else
+			SOLISTEN_UNLOCK_ASSERT(so);
+	} else {
+		/*
+		 * The pr_soreceive method will put a note without owning the
+		 * unp lock, so we can't assert it here.  But we can safely
+		 * dereference uxst_peer pointer, since receive buffer lock
+		 * is assumed to be held here.
+		 */
+		if (what == LA_LOCKED && so->so_rcv.uxst_peer != NULL)
+			SOCK_RECVBUF_LOCK_ASSERT(so->so_rcv.uxst_peer);
+	}
+}
+
+static void
+uipc_filt_sowdetach(struct knote *kn)
+{
+	struct socket *so = kn->kn_fp->f_data;
+
+	uipc_wrknl_lock(so);
+	knlist_remove(&so->so_wrsel.si_note, kn, 1);
+	uipc_wrknl_unlock(so);
+}
+
+static int
+uipc_filt_sowrite(struct knote *kn, long hint)
+{
+	struct socket *so = kn->kn_fp->f_data, *so2;
+	struct unpcb *unp = sotounpcb(so), *unp2 = unp->unp_conn;
+
+	if (SOLISTENING(so) || unp2 == NULL)
+		return (0);
+
+	so2 = unp2->unp_socket;
+	SOCK_RECVBUF_LOCK_ASSERT(so2);
+	kn->kn_data = uipc_stream_sbspace(&so2->so_rcv);
+
+	if (so2->so_rcv.sb_state & SBS_CANTRCVMORE) {
+		kn->kn_flags |= EV_EOF;
+		kn->kn_fflags = so->so_error;
+		return (1);
+	} else if (kn->kn_sfflags & NOTE_LOWAT)
+		return (kn->kn_data >= kn->kn_sdata);
+	else
+		return (kn->kn_data >= so2->so_rcv.sb_lowat);
+}
+
+static int
+uipc_filt_soempty(struct knote *kn, long hint)
+{
+	struct socket *so = kn->kn_fp->f_data, *so2;
+	struct unpcb *unp = sotounpcb(so), *unp2 = unp->unp_conn;
+
+	if (SOLISTENING(so) || unp2 == NULL)
+		return (1);
+
+	so2 = unp2->unp_socket;
+	SOCK_RECVBUF_LOCK_ASSERT(so2);
+	kn->kn_data = uipc_stream_sbspace(&so2->so_rcv);
+
+	return (kn->kn_data == 0 ? 1 : 0);
+}
+
+static const struct filterops uipc_write_filtops = {
+	.f_isfd = 1,
+	.f_detach = uipc_filt_sowdetach,
+	.f_event = uipc_filt_sowrite,
+};
+static const struct filterops uipc_empty_filtops = {
+	.f_isfd = 1,
+	.f_detach = uipc_filt_sowdetach,
+	.f_event = uipc_filt_soempty,
+};
+
+static int
+uipc_kqfilter_stream_or_seqpacket(struct socket *so, struct knote *kn)
+{
+	struct unpcb *unp = sotounpcb(so);
+	struct knlist *knl;
+
+	switch (kn->kn_filter) {
+	case EVFILT_READ:
+		return (sokqfilter_generic(so, kn));
+	case EVFILT_WRITE:
+		kn->kn_fop = &uipc_write_filtops;
+		break;
+	case EVFILT_EMPTY:
+		kn->kn_fop = &uipc_empty_filtops;
+		break;
+	default:
+		return (EINVAL);
+	}
+
+	knl = &so->so_wrsel.si_note;
+	UNP_PCB_LOCK(unp);
+	if (SOLISTENING(so)) {
+		SOLISTEN_LOCK(so);
+		knlist_add(knl, kn, 1);
+		SOLISTEN_UNLOCK(so);
+	} else {
+		struct socket *so2 = so->so_rcv.uxst_peer;
+
+		if (so2 != NULL)
+			SOCK_RECVBUF_LOCK(so2);
+		knlist_add(knl, kn, 1);
+		if (so2 != NULL)
+			SOCK_RECVBUF_UNLOCK(so2);
+	}
+	UNP_PCB_UNLOCK(unp);
 	return (0);
 }
 
@@ -2529,11 +2868,15 @@ unp_connectat(int fd, struct socket *so, struct sockaddr *nam,
 	}
 	if (connreq) {
 		if (SOLISTENING(so2))
-			so2 = sonewconn(so2, 0);
+			so2 = solisten_clone(so2);
 		else
 			so2 = NULL;
 		if (so2 == NULL) {
 			error = ECONNREFUSED;
+			goto bad2;
+		}
+		if ((error = uipc_attach(so2, 0, NULL)) != 0) {
+			sodealloc(so2);
 			goto bad2;
 		}
 		unp3 = sotounpcb(so2);
@@ -2564,7 +2907,9 @@ unp_connectat(int fd, struct socket *so, struct sockaddr *nam,
 	KASSERT(unp2 != NULL && so2 != NULL && unp2->unp_socket == so2 &&
 	    sotounpcb(so2) == unp2,
 	    ("%s: unp2 %p so2 %p", __func__, unp2, so2));
-	unp_connect2(so, so2);
+	unp_connect2(so, so2, connreq);
+	if (connreq)
+		(void)solisten_enqueue(so2, SS_ISCONNECTED);
 	KASSERT((unp->unp_flags & UNP_CONNECTING) != 0,
 	    ("%s: unp %p has UNP_CONNECTING clear", __func__, unp));
 	unp->unp_flags &= ~UNP_CONNECTING;
@@ -2614,8 +2959,65 @@ unp_copy_peercred(struct thread *td, struct unpcb *client_unp,
 	client_unp->unp_flags |= (listen_unp->unp_flags & UNP_WANTCRED_MASK);
 }
 
+/*
+ * unix/stream & unix/seqpacket version of soisconnected().
+ *
+ * The crucial thing we are doing here is setting up the uxst_peer linkage,
+ * holding unp and receive buffer locks of the both sockets.  The disconnect
+ * procedure does the same.  This gives as a safe way to access the peer in the
+ * send(2) and recv(2) during the socket lifetime.
+ *
+ * The less important thing is event notification of the fact that a socket is
+ * now connected.  It is unusual for a software to put a socket into event
+ * mechanism before connect(2), but is supposed to be supported.  Note that
+ * there can not be any sleeping I/O on the socket, yet, only presence in the
+ * select/poll/kevent.
+ *
+ * This function can be called via two call paths:
+ * 1) socketpair(2) - in this case socket has not been yet reported to userland
+ *    and just can't have any event notifications mechanisms set up.  The
+ *    'wakeup' boolean is always false.
+ * 2) connect(2) of existing socket to a recent clone of a listener:
+ *   2.1) Socket that connect(2)s will have 'wakeup' true.  An application
+ *        could have already put it into event mechanism, is it shall be
+ *        reported as readable and as writable.
+ *   2.2) Socket that was just cloned with solisten_clone().  Same as 1).
+ */
 static void
-unp_connect2(struct socket *so, struct socket *so2)
+unp_soisconnected(struct socket *so, bool wakeup)
+{
+	struct socket *so2 = sotounpcb(so)->unp_conn->unp_socket;
+	struct sockbuf *sb;
+
+	SOCK_LOCK_ASSERT(so);
+	UNP_PCB_LOCK_ASSERT(sotounpcb(so));
+	UNP_PCB_LOCK_ASSERT(sotounpcb(so2));
+	SOCK_RECVBUF_LOCK_ASSERT(so);
+	SOCK_RECVBUF_LOCK_ASSERT(so2);
+
+	MPASS(so->so_type == SOCK_STREAM || so->so_type == SOCK_SEQPACKET);
+	MPASS((so->so_state & (SS_ISCONNECTED | SS_ISCONNECTING |
+	    SS_ISDISCONNECTING | SS_ISDISCONNECTED)) == 0);
+	MPASS(so->so_qstate == SQ_NONE);
+
+	so->so_state |= SS_ISCONNECTED;
+
+	sb = &so2->so_rcv;
+	sb->uxst_peer = so;
+
+	if (wakeup) {
+		KNOTE_LOCKED(&sb->sb_sel->si_note, 0);
+		sb = &so->so_rcv;
+		selwakeuppri(sb->sb_sel, PSOCK);
+		SOCK_SENDBUF_LOCK_ASSERT(so);
+		sb = &so->so_snd;
+		selwakeuppri(sb->sb_sel, PSOCK);
+		SOCK_SENDBUF_UNLOCK(so);
+	}
+}
+
+static void
+unp_connect2(struct socket *so, struct socket *so2, bool wakeup)
 {
 	struct unpcb *unp;
 	struct unpcb *unp2;
@@ -2647,8 +3049,18 @@ unp_connect2(struct socket *so, struct socket *so2)
 		KASSERT(unp2->unp_conn == NULL,
 		    ("%s: socket %p is already connected", __func__, unp2));
 		unp2->unp_conn = unp;
-		soisconnected(so);
-		soisconnected(so2);
+		SOCK_LOCK(so);
+		SOCK_LOCK(so2);
+		if (wakeup)	/* Avoid LOR with receive buffer lock. */
+			SOCK_SENDBUF_LOCK(so);
+		SOCK_RECVBUF_LOCK(so);
+		SOCK_RECVBUF_LOCK(so2);
+		unp_soisconnected(so, wakeup);	/* Will unlock send buffer. */
+		unp_soisconnected(so2, false);
+		SOCK_RECVBUF_UNLOCK(so);
+		SOCK_RECVBUF_UNLOCK(so2);
+		SOCK_UNLOCK(so);
+		SOCK_UNLOCK(so2);
 		break;
 
 	default:
@@ -2659,14 +3071,18 @@ unp_connect2(struct socket *so, struct socket *so2)
 static void
 unp_soisdisconnected(struct socket *so)
 {
-	SOCK_LOCK(so);
+	SOCK_LOCK_ASSERT(so);
+	SOCK_RECVBUF_LOCK_ASSERT(so);
+	MPASS(so->so_type == SOCK_STREAM || so->so_type == SOCK_SEQPACKET);
 	MPASS(!SOLISTENING(so));
+	MPASS((so->so_state & (SS_ISCONNECTING | SS_ISDISCONNECTING |
+	    SS_ISDISCONNECTED)) == 0);
+	MPASS(so->so_state & SS_ISCONNECTED);
+
 	so->so_state |= SS_ISDISCONNECTED;
 	so->so_state &= ~SS_ISCONNECTED;
-	SOCK_RECVBUF_LOCK(so);
+	so->so_rcv.uxst_peer = NULL;
 	socantrcvmore_locked(so);
-	SOCK_UNLOCK(so);
-	wakeup(&so->so_timeo);	/* XXXGL: is this needed? */
 }
 
 static void
@@ -2741,10 +3157,16 @@ unp_disconnect(struct unpcb *unp, struct unpcb *unp2)
 
 	case SOCK_STREAM:
 	case SOCK_SEQPACKET:
+		SOCK_LOCK(so);
+		SOCK_LOCK(so2);
+		SOCK_RECVBUF_LOCK(so);
+		SOCK_RECVBUF_LOCK(so2);
 		unp_soisdisconnected(so);
 		MPASS(unp2->unp_conn == unp);
 		unp2->unp_conn = NULL;
 		unp_soisdisconnected(so2);
+		SOCK_UNLOCK(so);
+		SOCK_UNLOCK(so2);
 		break;
 	}
 
@@ -3880,6 +4302,8 @@ static struct protosw streamproto = {
 	.pr_sockaddr =		uipc_sockaddr,
 	.pr_sosend = 		uipc_sosend_stream_or_seqpacket,
 	.pr_soreceive =		uipc_soreceive_stream_or_seqpacket,
+	.pr_sopoll =		uipc_sopoll_stream_or_seqpacket,
+	.pr_kqfilter =		uipc_kqfilter_stream_or_seqpacket,
 	.pr_close =		uipc_close,
 	.pr_chmod =		uipc_chmod,
 };
@@ -3929,6 +4353,8 @@ static struct protosw seqpacketproto = {
 	.pr_sockaddr =		uipc_sockaddr,
 	.pr_sosend = 		uipc_sosend_stream_or_seqpacket,
 	.pr_soreceive =		uipc_soreceive_stream_or_seqpacket,
+	.pr_sopoll =		uipc_sopoll_stream_or_seqpacket,
+	.pr_kqfilter =		uipc_kqfilter_stream_or_seqpacket,
 	.pr_close =		uipc_close,
 	.pr_chmod =		uipc_chmod,
 };
