@@ -73,6 +73,7 @@
 #include <sys/mount.h>
 #include <sys/mutex.h>
 #include <sys/namei.h>
+#include <sys/poll.h>
 #include <sys/proc.h>
 #include <sys/protosw.h>
 #include <sys/queue.h>
@@ -1506,6 +1507,75 @@ restart:
 	uio->uio_td->td_ru.ru_msgrcv++;
 
 	return (0);
+}
+
+/* XXXGL: ignoring POLLINIGNEOF */
+static int
+uipc_sopoll_stream_or_seqpacket(struct socket *so, int events,
+    struct thread *td)
+{
+	struct unpcb *unp = sotounpcb(so);
+	int revents;
+
+	UNP_PCB_LOCK(unp);
+	if (SOLISTENING(so)) {
+		/* The above check is safe, since conversion to listening uses
+		 * both protocol and socket lock.
+		 */
+		SOCK_LOCK(so);
+		if (!(events & (POLLIN | POLLRDNORM)))
+			revents = 0;
+		else if (!TAILQ_EMPTY(&so->sol_comp))
+			revents = events & (POLLIN | POLLRDNORM);
+		else if (so->so_error)
+			revents = (events & (POLLIN | POLLRDNORM)) | POLLHUP;
+		else {
+			selrecord(td, &so->so_rdsel);
+			revents = 0;
+		}
+		SOCK_UNLOCK(so);
+	} else {
+		struct unpcb *unp2;
+
+		if (so->so_state & SS_ISDISCONNECTED)
+			revents = POLLHUP;
+		else
+			revents = 0;
+		if (events & (POLLIN | POLLRDNORM | POLLRDHUP)) {
+			SOCK_RECVBUF_LOCK(so);
+			if (sbavail(&so->so_rcv) >= so->so_rcv.sb_lowat ||
+			    so->so_error || so->so_rerror)
+				revents |= events & (POLLIN | POLLRDNORM);
+			if (so->so_rcv.sb_state & SBS_CANTRCVMORE)
+				revents |= events & POLLRDHUP;
+			if (!(revents & (POLLIN | POLLRDNORM | POLLRDHUP))) {
+				selrecord(td, &so->so_rdsel);
+				so->so_rcv.sb_flags |= SB_SEL;
+			}
+			SOCK_RECVBUF_UNLOCK(so);
+		}
+		if ((events & (POLLOUT | POLLWRNORM)) &&
+		    (unp2 = unp_pcb_lock_peer(unp))) {
+			struct socket *so2 = unp2->unp_socket;
+			struct sockbuf *sb = &so2->so_rcv;
+
+			SOCK_RECVBUF_LOCK(so2);
+			if (uipc_stream_sbspace(sb) >= sb->sb_lowat)
+				revents |= events & (POLLOUT | POLLWRNORM);
+			if (sb->sb_state & SBS_CANTRCVMORE)
+				revents |= POLLHUP;
+			SOCK_RECVBUF_UNLOCK(so2);
+			if (!(revents & (POLLOUT | POLLWRNORM))) {
+				SOCK_SENDBUF_LOCK(so);
+				selrecord(td, &so->so_wrsel);
+				so->so_snd.sb_flags |= SB_SEL;
+				SOCK_SENDBUF_UNLOCK(so);
+			}
+			UNP_PCB_UNLOCK(unp2);
+		}
+	}
+	UNP_PCB_UNLOCK(unp);
+	return (revents);
 }
 
 /* PF_UNIX/SOCK_DGRAM version of sbspace() */
@@ -3880,6 +3950,7 @@ static struct protosw streamproto = {
 	.pr_sockaddr =		uipc_sockaddr,
 	.pr_sosend = 		uipc_sosend_stream_or_seqpacket,
 	.pr_soreceive =		uipc_soreceive_stream_or_seqpacket,
+	.pr_sopoll =		uipc_sopoll_stream_or_seqpacket,
 	.pr_close =		uipc_close,
 	.pr_chmod =		uipc_chmod,
 };
@@ -3929,6 +4000,7 @@ static struct protosw seqpacketproto = {
 	.pr_sockaddr =		uipc_sockaddr,
 	.pr_sosend = 		uipc_sosend_stream_or_seqpacket,
 	.pr_soreceive =		uipc_soreceive_stream_or_seqpacket,
+	.pr_sopoll =		uipc_sopoll_stream_or_seqpacket,
 	.pr_close =		uipc_close,
 	.pr_chmod =		uipc_chmod,
 };
