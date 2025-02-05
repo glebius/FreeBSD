@@ -313,6 +313,10 @@ static int	unp_externalize_fp(struct file *);
 static void	unp_addsockcred(struct thread *, struct mchain *, int);
 static void	unp_process_defers(void * __unused, int);
 
+static void	uipc_wrknl_lock(void *);
+static void	uipc_wrknl_unlock(void *);
+static void	uipc_wrknl_assert_lock(void *, int);
+
 static void
 unp_pcb_hold(struct unpcb *unp)
 {
@@ -505,6 +509,8 @@ uipc_attach(struct socket *so, int proto, struct thread *td)
 		sendspace = unpsp_sendspace;
 		recvspace = unpsp_recvspace;
 common:
+		knlist_init(&so->so_wrsel.si_note, so, uipc_wrknl_lock,
+		    uipc_wrknl_unlock, uipc_wrknl_assert_lock);
 		STAILQ_INIT(&so->so_rcv.uxst_mbq);
 		break;
 	default:
@@ -1576,6 +1582,174 @@ uipc_sopoll_stream_or_seqpacket(struct socket *so, int events,
 	}
 	UNP_PCB_UNLOCK(unp);
 	return (revents);
+}
+
+static void
+uipc_wrknl_lock(void *arg)
+{
+	struct socket *so = arg;
+	struct unpcb *unp = sotounpcb(so), *unp2;
+
+retry:
+	if (SOLISTENING(so)) {
+		SOLISTEN_LOCK(so);
+	} else {
+		UNP_PCB_LOCK(unp);
+		if (__predict_false(SOLISTENING(so))) {
+			UNP_PCB_UNLOCK(unp);
+			goto retry;
+		}
+		if ((unp2 = unp_pcb_lock_peer(unp)) != NULL) {
+			MPASS(unp != unp2);
+			SOCK_RECVBUF_LOCK(unp2->unp_socket);
+		}
+	}
+}
+
+static void
+uipc_wrknl_unlock(void *arg)
+{
+	struct socket *so = arg;
+	struct unpcb *unp = sotounpcb(so), *unp2 = unp->unp_conn;
+
+	if (SOLISTENING(so))
+		SOLISTEN_UNLOCK(so);
+	else {
+		if (unp2 != NULL) {
+			SOCK_RECVBUF_UNLOCK(unp2->unp_socket);
+			UNP_PCB_UNLOCK(unp2);
+		}
+		UNP_PCB_UNLOCK(unp);
+	}
+}
+
+static void
+uipc_wrknl_assert_lock(void *arg, int what)
+{
+	struct socket *so = arg;
+	struct unpcb *unp = sotounpcb(so), *unp2 = unp->unp_conn;
+
+	if (SOLISTENING(so)) {
+		if (what == LA_LOCKED)
+			SOLISTEN_LOCK_ASSERT(so);
+		else
+			SOLISTEN_UNLOCK_ASSERT(so);
+	} else {
+		if (what == LA_LOCKED) {
+			UNP_PCB_LOCK_ASSERT(unp);
+			if (unp2 != NULL) {
+				UNP_PCB_LOCK_ASSERT(unp2);
+				SOCK_RECVBUF_LOCK_ASSERT(unp2->unp_socket);
+			}
+		} else
+			UNP_PCB_UNLOCK_ASSERT(unp);
+	}
+}
+
+static void
+uipc_filt_sowdetach(struct knote *kn)
+{
+	struct socket *so = kn->kn_fp->f_data;
+	struct unpcb *unp = sotounpcb(so), *unp2;
+
+	uipc_wrknl_lock(so);
+	knlist_remove(&so->so_wrsel.si_note, kn, 1);
+	if (!SOLISTENING(so) && knlist_empty(&so->so_wrsel.si_note) &&
+	    (unp2 = unp->unp_conn) != NULL)
+		unp2->unp_socket->so_rcv.sb_flags &= ~SB_KNOTE;
+	uipc_wrknl_unlock(so);
+}
+
+static int
+uipc_filt_sowrite(struct knote *kn, long hint)
+{
+	struct socket *so = kn->kn_fp->f_data, *so2;
+	struct unpcb *unp = sotounpcb(so), *unp2 = unp->unp_conn;
+
+	if (SOLISTENING(so) || unp2 == NULL)
+		return (0);
+
+	so2 = unp2->unp_socket;
+	SOCK_RECVBUF_LOCK_ASSERT(so2);
+	kn->kn_data = uipc_stream_sbspace(&so2->so_rcv);
+
+	if (so2->so_rcv.sb_state & SBS_CANTRCVMORE) {
+		kn->kn_flags |= EV_EOF;
+		kn->kn_fflags = so->so_error;
+		return (1);
+	} else if (kn->kn_sfflags & NOTE_LOWAT)
+		return (kn->kn_data >= kn->kn_sdata);
+	else
+		return (kn->kn_data >= so2->so_snd.sb_lowat);
+}
+
+static int
+uipc_filt_soempty(struct knote *kn, long hint)
+{
+	struct socket *so = kn->kn_fp->f_data, *so2;
+	struct unpcb *unp = sotounpcb(so), *unp2 = unp->unp_conn;
+
+	if (SOLISTENING(so) || unp2 == NULL)
+		return (1);
+
+	so2 = unp2->unp_socket;
+	SOCK_RECVBUF_LOCK_ASSERT(so2);
+	kn->kn_data = uipc_stream_sbspace(&so2->so_rcv);
+
+	return (kn->kn_data == 0 ? 1 : 0);
+}
+
+static const struct filterops uipc_write_filtops = {
+	.f_isfd = 1,
+	.f_detach = uipc_filt_sowdetach,
+	.f_event = uipc_filt_sowrite,
+};
+static const struct filterops uipc_empty_filtops = {
+	.f_isfd = 1,
+	.f_detach = uipc_filt_sowdetach,
+	.f_event = uipc_filt_soempty,
+};
+
+static int
+uipc_kqfilter_stream_or_seqpacket(struct socket *so, struct knote *kn)
+{
+	struct unpcb *unp = sotounpcb(so), *unp2;
+	struct knlist *knl;
+
+	switch (kn->kn_filter) {
+	case EVFILT_READ:
+		return (sokqfilter_generic(so, kn));
+	case EVFILT_WRITE:
+		kn->kn_fop = &uipc_write_filtops;
+		break;
+	case EVFILT_EMPTY:
+		kn->kn_fop = &uipc_empty_filtops;
+		break;
+	default:
+		return (EINVAL);
+	}
+
+	knl = &so->so_wrsel.si_note;
+	UNP_PCB_LOCK(unp);
+	if (SOLISTENING(so)) {
+		SOLISTEN_LOCK(so);
+		knlist_add(knl, kn, 1);
+		SOLISTEN_UNLOCK(so);
+	} else {
+		if ((unp2 = unp_pcb_lock_peer(unp)) != NULL) {
+			MPASS(unp != unp2);
+			SOCK_RECVBUF_LOCK(unp2->unp_socket);
+			knlist_add(knl, kn, 1);
+			unp2->unp_socket->so_rcv.sb_flags |= SB_KNOTE;
+			SOCK_RECVBUF_UNLOCK(unp2->unp_socket);
+			UNP_PCB_UNLOCK(unp2);
+		} else {
+			UNP_PCB_UNLOCK(unp);
+			return (ENOTCONN);
+		}
+	}
+	UNP_PCB_UNLOCK(unp);
+	return (0);
 }
 
 /* PF_UNIX/SOCK_DGRAM version of sbspace() */
@@ -2685,6 +2859,45 @@ unp_copy_peercred(struct thread *td, struct unpcb *client_unp,
 }
 
 static void
+unp_soisconnected(struct socket *so)
+{
+	struct sockbuf *sb;
+
+	SOCK_LOCK(so);
+	so->so_state &= ~(SS_ISCONNECTING|SS_ISDISCONNECTING);
+	so->so_state |= SS_ISCONNECTED;
+	if (so->so_qstate == SQ_INCOMP)
+		return (socanbeaccepted(so));	/* unlocks */
+	SOCK_UNLOCK(so);
+	wakeup(&so->so_timeo);	/* XXXGL: is this needed? */
+	sorwakeup(so);
+
+	/*
+	 * Our special version of sowwakeup() follows.  kqueue(9) is smart
+	 * enough to work on the receive buffer of the peer.  Rest of the
+	 * event dispatchers wakeups are copied from sowwakeup().
+	 */
+	SOCK_SENDBUF_LOCK(so);
+	sb = &so->so_snd;
+	selwakeuppri(sb->sb_sel, PSOCK);
+	if (sb->sb_flags & SB_WAIT) {
+		sb->sb_flags &= ~SB_WAIT;
+		wakeup(&sb->sb_acc);
+	}
+	if (sb->sb_flags & SB_AIO)
+		sowakeup_aio(so, SO_SND);
+	SOCK_SENDBUF_UNLOCK(so);
+
+	UNP_PCB_LOCK_ASSERT(sotounpcb(so));
+	UNP_PCB_LOCK_ASSERT(sotounpcb(so)->unp_conn);
+
+	SOCK_RECVBUF_LOCK(sotounpcb(so)->unp_conn->unp_socket);
+	sb = &sotounpcb(so)->unp_conn->unp_socket->so_rcv;
+	KNOTE_LOCKED(&sb->sb_sel->si_note, 0);
+	SOCK_RECVBUF_UNLOCK(sotounpcb(so)->unp_conn->unp_socket);
+}
+
+static void
 unp_connect2(struct socket *so, struct socket *so2)
 {
 	struct unpcb *unp;
@@ -2717,8 +2930,8 @@ unp_connect2(struct socket *so, struct socket *so2)
 		KASSERT(unp2->unp_conn == NULL,
 		    ("%s: socket %p is already connected", __func__, unp2));
 		unp2->unp_conn = unp;
-		soisconnected(so);
-		soisconnected(so2);
+		unp_soisconnected(so);
+		unp_soisconnected(so2);
 		break;
 
 	default:
@@ -3951,6 +4164,7 @@ static struct protosw streamproto = {
 	.pr_sosend = 		uipc_sosend_stream_or_seqpacket,
 	.pr_soreceive =		uipc_soreceive_stream_or_seqpacket,
 	.pr_sopoll =		uipc_sopoll_stream_or_seqpacket,
+	.pr_kqfilter =		uipc_kqfilter_stream_or_seqpacket,
 	.pr_close =		uipc_close,
 	.pr_chmod =		uipc_chmod,
 };
@@ -4001,6 +4215,7 @@ static struct protosw seqpacketproto = {
 	.pr_sosend = 		uipc_sosend_stream_or_seqpacket,
 	.pr_soreceive =		uipc_soreceive_stream_or_seqpacket,
 	.pr_sopoll =		uipc_sopoll_stream_or_seqpacket,
+	.pr_kqfilter =		uipc_kqfilter_stream_or_seqpacket,
 	.pr_close =		uipc_close,
 	.pr_chmod =		uipc_chmod,
 };
