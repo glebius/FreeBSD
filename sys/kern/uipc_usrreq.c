@@ -1181,7 +1181,15 @@ restart:
 		space = uipc_stream_sbspace(sb);
 		if (space < sb->sb_lowat || space < cmc.mc_len) {
 			if (nonblock) {
+				if (aio)
+					sb->sb_flags |= SB_AIO_PEER;
 				SOCK_RECVBUF_UNLOCK(so2);
+				if (aio) {
+					SOCK_SENDBUF_LOCK(so);
+					so->so_snd.sb_ccc =
+					    so->so_snd.sb_hiwat - space;
+					SOCK_SENDBUF_UNLOCK(so);
+				}
 				error = EWOULDBLOCK;
 				goto out4;
 			}
@@ -1407,6 +1415,8 @@ restart:
 
 	UIPC_STREAM_SBCHECK(sb);
 	if (!peek) {
+		bool aio_peer;
+
 		if (last == NULL)
 			STAILQ_INIT(&sb->uxst_mbq);
 		else {
@@ -1423,8 +1433,29 @@ restart:
 		MPASS(sb->sb_mbcnt >= mbcnt);
 		sb->sb_mbcnt -= mbcnt;
 		UIPC_STREAM_SBCHECK(sb);
-		/* Mind the name.  We are waking writer here, not reader. */
+		/*
+		 * With a normal use, uipc_sosend_stream_or_seqpacket() is
+		 * sleeping on our receive buffer, thus we are using
+		 * sor[ead]wakeup, actually waking up a writer.
+		 * With aio(9) use, the aio machinery uses peer's send buffer
+		 * to sleep, so we need to workaround this.
+		 */
+		if (__predict_false((aio_peer = sb->sb_flags & SB_AIO_PEER)))
+			sb->sb_flags &= ~SB_AIO_PEER;
 		sorwakeup_locked(so);
+		if (aio_peer) {
+			struct unpcb *unp2;
+
+			if (uipc_lock_peer(so, &unp2) == 0) {
+				struct socket *so2 = unp2->unp_socket;
+
+				SOCK_SENDBUF_LOCK(so2);
+				so2->so_snd.sb_ccc -= datalen;
+				sowakeup_aio(so2, SO_SND);
+				SOCK_SENDBUF_UNLOCK(so2);
+				UNP_PCB_UNLOCK(unp2);
+			}
+		}
 	} else
 		SOCK_RECVBUF_UNLOCK(so);
 
