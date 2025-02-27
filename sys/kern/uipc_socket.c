@@ -4687,77 +4687,85 @@ soisconnecting(struct socket *so)
 }
 
 void
+socanbeaccepted(struct socket *so)
+{
+	struct socket *head = so->so_listen;
+	int ret;
+	bool last __diagused;
+
+	SOCK_LOCK_ASSERT(so);
+	MPASS(so->so_qstate == SQ_INCOMP);
+	MPASS(head != NULL);
+
+	/*
+	 * Promoting a socket from incomplete queue to complete, we need to go
+	 * through reverse order of locking.  We first do trylock, and if that
+	 * doesn't succeed, we go the hard way leaving a reference and
+	 * rechecking consistency after proper locking.
+	 */
+	if (__predict_false(SOLISTEN_TRYLOCK(head) == 0)) {
+		soref(head);
+		SOCK_UNLOCK(so);
+		SOLISTEN_LOCK(head);
+		SOCK_LOCK(so);
+		if (__predict_false(head != so->so_listen)) {
+			/*
+			 * The socket went off the listen queue, should be lost
+			 * race to close(2) of sol.  The socket is about to
+			 * soabort().
+			 */
+			SOCK_UNLOCK(so);
+			sorele_locked(head);
+			return;
+		}
+		last = refcount_release(&head->so_count);
+		KASSERT(!last, ("%s: released last reference for %p",
+		    __func__, head));
+	}
+again:
+	if ((so->so_options & SO_ACCEPTFILTER) == 0) {
+		TAILQ_REMOVE(&head->sol_incomp, so, so_list);
+		head->sol_incqlen--;
+		TAILQ_INSERT_TAIL(&head->sol_comp, so, so_list);
+		head->sol_qlen++;
+		so->so_qstate = SQ_COMP;
+		SOCK_UNLOCK(so);
+		solisten_wakeup(head);	/* unlocks */
+	} else {
+		SOCK_RECVBUF_LOCK(so);
+		soupcall_set(so, SO_RCV,
+		    head->sol_accept_filter->accf_callback,
+		    head->sol_accept_filter_arg);
+		so->so_options &= ~SO_ACCEPTFILTER;
+		ret = head->sol_accept_filter->accf_callback(so,
+		    head->sol_accept_filter_arg, M_NOWAIT);
+		if (ret == SU_ISCONNECTED) {
+			soupcall_clear(so, SO_RCV);
+			SOCK_RECVBUF_UNLOCK(so);
+			goto again;
+		}
+		SOCK_RECVBUF_UNLOCK(so);
+		SOCK_UNLOCK(so);
+		SOLISTEN_UNLOCK(head);
+	}
+	return;
+}
+
+void
 soisconnected(struct socket *so)
 {
-	bool last __diagused;
 
 	SOCK_LOCK(so);
 	so->so_state &= ~(SS_ISCONNECTING|SS_ISDISCONNECTING);
 	so->so_state |= SS_ISCONNECTED;
-
 	if (so->so_qstate == SQ_INCOMP) {
-		struct socket *head = so->so_listen;
-		int ret;
-
-		KASSERT(head, ("%s: so %p on incomp of NULL", __func__, so));
-		/*
-		 * Promoting a socket from incomplete queue to complete, we
-		 * need to go through reverse order of locking.  We first do
-		 * trylock, and if that doesn't succeed, we go the hard way
-		 * leaving a reference and rechecking consistency after proper
-		 * locking.
-		 */
-		if (__predict_false(SOLISTEN_TRYLOCK(head) == 0)) {
-			soref(head);
-			SOCK_UNLOCK(so);
-			SOLISTEN_LOCK(head);
-			SOCK_LOCK(so);
-			if (__predict_false(head != so->so_listen)) {
-				/*
-				 * The socket went off the listen queue,
-				 * should be lost race to close(2) of sol.
-				 * The socket is about to soabort().
-				 */
-				SOCK_UNLOCK(so);
-				sorele_locked(head);
-				return;
-			}
-			last = refcount_release(&head->so_count);
-			KASSERT(!last, ("%s: released last reference for %p",
-			    __func__, head));
-		}
-again:
-		if ((so->so_options & SO_ACCEPTFILTER) == 0) {
-			TAILQ_REMOVE(&head->sol_incomp, so, so_list);
-			head->sol_incqlen--;
-			TAILQ_INSERT_TAIL(&head->sol_comp, so, so_list);
-			head->sol_qlen++;
-			so->so_qstate = SQ_COMP;
-			SOCK_UNLOCK(so);
-			solisten_wakeup(head);	/* unlocks */
-		} else {
-			SOCK_RECVBUF_LOCK(so);
-			soupcall_set(so, SO_RCV,
-			    head->sol_accept_filter->accf_callback,
-			    head->sol_accept_filter_arg);
-			so->so_options &= ~SO_ACCEPTFILTER;
-			ret = head->sol_accept_filter->accf_callback(so,
-			    head->sol_accept_filter_arg, M_NOWAIT);
-			if (ret == SU_ISCONNECTED) {
-				soupcall_clear(so, SO_RCV);
-				SOCK_RECVBUF_UNLOCK(so);
-				goto again;
-			}
-			SOCK_RECVBUF_UNLOCK(so);
-			SOCK_UNLOCK(so);
-			SOLISTEN_UNLOCK(head);
-		}
-		return;
+		socanbeaccepted(so);
+	} else {
+		SOCK_UNLOCK(so);
+		wakeup(&so->so_timeo);
+		sorwakeup(so);
+		sowwakeup(so);
 	}
-	SOCK_UNLOCK(so);
-	wakeup(&so->so_timeo);
-	sorwakeup(so);
-	sowwakeup(so);
 }
 
 void

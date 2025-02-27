@@ -564,6 +564,7 @@ void	sowakeup_aio(struct socket *, sb_which);
 void	solisten_wakeup(struct socket *);
 int	selsocket(struct socket *so, int events, struct timeval *tv,
 	    struct thread *td);
+void	socanbeaccepted(struct socket *so);
 void	soisconnected(struct socket *so);
 void	soisconnecting(struct socket *so);
 void	soisdisconnected(struct socket *so);
