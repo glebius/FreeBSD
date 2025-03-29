@@ -1649,8 +1649,6 @@ uipc_sopoll_stream_or_seqpacket(struct socket *so, int events,
 		}
 		SOCK_UNLOCK(so);
 	} else {
-		struct unpcb *unp2;
-
 		if (so->so_state & SS_ISDISCONNECTED)
 			revents = POLLHUP;
 		else
@@ -1669,8 +1667,9 @@ uipc_sopoll_stream_or_seqpacket(struct socket *so, int events,
 			SOCK_RECVBUF_UNLOCK(so);
 		}
 		if (events & (POLLOUT | POLLWRNORM)) {
-			if ((unp2 = unp_pcb_lock_peer(unp))) {
-				struct socket *so2 = unp2->unp_socket;
+			struct socket *so2 = so->so_rcv.uxst_peer;
+
+			if (so2 != NULL) {
 				struct sockbuf *sb = &so2->so_rcv;
 
 				SOCK_RECVBUF_LOCK(so2);
@@ -1682,7 +1681,6 @@ uipc_sopoll_stream_or_seqpacket(struct socket *so, int events,
 				if (!(revents & (POLLOUT | POLLWRNORM)))
 					so2->so_rcv.uxst_flags |= UXST_PEER_SEL;
 				SOCK_RECVBUF_UNLOCK(so2);
-				UNP_PCB_UNLOCK(unp2);
 			}
 			if (!(revents & (POLLOUT | POLLWRNORM)))
 				selrecord(td, &so->so_wrsel);
