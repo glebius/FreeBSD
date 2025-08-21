@@ -41,6 +41,7 @@ struct hdb_master_key_data {
     krb5_keytab_entry keytab;
     krb5_crypto crypto;
     struct hdb_master_key_data *next;
+    unsigned int key_usage;
 };
 
 void
@@ -69,6 +70,7 @@ hdb_process_master_key(krb5_context context,
 	krb5_set_error_message(context, ENOMEM, "malloc: out of memory");
 	return ENOMEM;
     }
+    (*mkey)->key_usage = HDB_KU_MKEY;
     (*mkey)->keytab.vno = kvno;
     ret = krb5_parse_name(context, "K/M", &(*mkey)->keytab.principal);
     if(ret)
@@ -363,6 +365,15 @@ hdb_write_master_key(krb5_context context, const char *filename,
     return ret;
 }
 
+krb5_error_code
+_hdb_set_master_key_usage(krb5_context context, HDB *db, unsigned int key_usage)
+{
+    if (db->hdb_master_key_set == 0)
+	return HDB_ERR_NO_MKEY;
+    db->hdb_master_key->key_usage = key_usage;
+    return 0;
+}
+
 hdb_master_key
 _hdb_find_master_key(uint32_t *mkvno, hdb_master_key mkey)
 {
@@ -636,9 +647,9 @@ hdb_seal_key(krb5_context context, HDB *db, Key *k)
 }
 
 krb5_error_code
-hdb_set_master_key (krb5_context context,
-		    HDB *db,
-		    krb5_keyblock *key)
+hdb_set_master_key(krb5_context context,
+		   HDB *db,
+		   krb5_keyblock *key)
 {
     krb5_error_code ret;
     hdb_master_key mkey;
@@ -651,6 +662,7 @@ hdb_set_master_key (krb5_context context,
     des_set_random_generator_seed(key.keyvalue.data);
 #endif
     db->hdb_master_key_set = 1;
+    db->hdb_master_key->key_usage = HDB_KU_MKEY;
     return 0;
 }
 
