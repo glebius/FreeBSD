@@ -78,14 +78,16 @@ struct hypctx {
 	uint64_t	pmcr_el0;	/* Performance Monitors Control Register */
 	uint64_t	pmccntr_el0;
 	uint64_t	pmccfiltr_el0;
+	uint64_t	pmuserenr_el0;
+	uint64_t	pmselr_el0;
+	uint64_t	pmxevcntr_el0;
 	uint64_t	pmcntenset_el0;
 	uint64_t	pmintenset_el1;
 	uint64_t	pmovsset_el0;
-	uint64_t	pmselr_el0;
-	uint64_t	pmuserenr_el0;
 	uint64_t	pmevcntr_el0[31];
 	uint64_t	pmevtyper_el0[31];
 
+	uint64_t	dbgclaimset_el1;
 	uint64_t	dbgbcr_el1[16];	/* Debug Breakpoint Control Registers */
 	uint64_t	dbgbvr_el1[16];	/* Debug Breakpoint Value Registers */
 	uint64_t	dbgwcr_el1[16];	/* Debug Watchpoint Control Registers */
@@ -125,6 +127,9 @@ struct hyp {
 	uint64_t	vmid_generation;
 	uint64_t	vttbr_el2;
 	uint64_t	el2_addr;	/* The address of this in el2 space */
+	uint64_t	feats;		/* Which features are enabled */
+#define	HYP_FEAT_HCX		(0x1ul << 0)
+#define	HYP_FEAT_ECV_POFF	(0x1ul << 1)
 	bool		vgic_attached;
 	struct vgic_v3	*vgic;
 	struct hypctx	*ctx[];

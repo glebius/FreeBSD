@@ -1243,9 +1243,8 @@ in6_ifadd(struct nd_prefixctl *pr, int mcast)
 
 		/* No suitable LL address, get the ifid directly */
 		if (ifid_addr == NULL) {
-			struct in6_addr taddr;
-			ifa = ifa_alloc(sizeof(taddr), M_WAITOK);
-			if (ifa) {
+			ifa = ifa_alloc(sizeof(struct in6_ifaddr), M_NOWAIT);
+			if (ifa != NULL) {
 				ib = (struct in6_ifaddr *)ifa;
 				ifid_addr = &ib->ia_addr.sin6_addr;
 				if(in6_get_ifid(ifp, NULL, ifid_addr) != 0) {
@@ -1757,7 +1756,7 @@ prelist_update(struct nd_prefixctl *new, struct nd_defrouter *dr,
 		 * to fail and no further retries should happen.
 		 */
 		if (ND_IFINFO(ifp)->flags & ND6_IFF_STABLEADDR &&
-		    counter_u64_fetch(ND_IFINFO(ifp)->dad_failures) <= V_ip6_stableaddr_maxretries &&
+		    counter_u64_fetch(DAD_FAILURES(ifp)) <= V_ip6_stableaddr_maxretries &&
 		    ifa6->ia6_flags & (IN6_IFF_DUPLICATED | IN6_IFF_TEMPORARY))
 			continue;
 

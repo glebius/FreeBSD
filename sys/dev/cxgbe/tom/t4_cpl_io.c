@@ -127,8 +127,9 @@ send_flowc_wr(struct toepcb *toep, struct tcpcb *tp)
 	paramidx = 0;
 
 	FLOWC_PARAM(PFNVFN, pfvf);
-	FLOWC_PARAM(CH, pi->tx_chan);
-	FLOWC_PARAM(PORT, pi->tx_chan);
+	/* Firmware expects hw port and will translate to channel itself. */
+	FLOWC_PARAM(CH, pi->hw_port);
+	FLOWC_PARAM(PORT, pi->hw_port);
 	FLOWC_PARAM(IQID, toep->ofld_rxq->iq.abs_id);
 	FLOWC_PARAM(SNDBUF, toep->params.sndbuf);
 	if (tp) {
@@ -2050,9 +2051,18 @@ write_set_tcb_field(struct adapter *sc, void *dst, struct toepcb *toep,
 	}
 
 	INIT_TP_WR_MIT_CPL(req, CPL_SET_TCB_FIELD, toep->tid);
-	req->reply_ctrl = htobe16(V_QUEUENO(toep->ofld_rxq->iq.abs_id));
-	if (reply == 0)
-		req->reply_ctrl |= htobe16(F_NO_REPLY);
+	if (reply == 0) {
+		req->reply_ctrl = htobe16(F_NO_REPLY);
+	} else {
+		const int qid = toep->ofld_rxq->iq.abs_id;
+		if (chip_id(sc) >= CHELSIO_T7) {
+			req->reply_ctrl = htobe16(V_T7_QUEUENO(qid) |
+			    V_T7_REPLY_CHAN(0) | V_NO_REPLY(0));
+		} else {
+			req->reply_ctrl = htobe16(V_QUEUENO(qid) |
+			    V_REPLY_CHAN(0) | V_NO_REPLY(0));
+		}
+	}
 	req->word_cookie = htobe16(V_WORD(word) | V_COOKIE(cookie));
 	req->mask = htobe64(mask);
 	req->val = htobe64(val);

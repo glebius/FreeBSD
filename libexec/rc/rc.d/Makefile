@@ -50,8 +50,6 @@ CONFS=	DAEMON \
 	${_nscd} \
 	${_opensm} \
 	os-release \
-	powerd \
-	pppoed \
 	pwcheck \
 	quota \
 	random \
@@ -126,6 +124,14 @@ NFSPACKAGE=		nfs
 CONFGROUPS+=		NEWSYSLOG
 NEWSYSLOG=		newsyslog
 NEWSYSLOGPACKAGE=	newsyslog
+
+CONFGROUPS+=		POWERD
+POWERD=			powerd
+POWERDPACKAGE=		powerd
+
+CONFGROUPS+=		PPPOED
+PPPOED=			pppoed
+PPPOEDPACKAGE=		ppp
 
 CONFGROUPS+=		SYSLOGD
 SYSLOGD=		syslogd
@@ -209,10 +215,10 @@ CCD=		ccd
 CCDPACKAGE=	ccdconfig
 .endif
 
-.if ${MK_FTP} != "no"
-CONFGROUPS+=	FTPD
-FTPD=		ftpd
-FTPDPACKAGE=	ftpd
+.if ${MK_CUSE} != "no"
+CONFGROUPS+=	VOSS
+VOSS=		virtual_oss
+VOSSPACKAGE=	sound
 .endif
 
 .if ${MK_KERBEROS_SUPPORT} != "no"
