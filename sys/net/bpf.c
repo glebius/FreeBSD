@@ -2291,7 +2291,6 @@ bpf_gettime(struct bintime *bt, int tstype, struct mbuf *m)
 void
 bpf_tap(struct bpf_if *bp, u_char *pkt, u_int pktlen)
 {
-	struct epoch_tracker et;
 	struct bintime bt;
 	struct bpf_d *d;
 #ifdef BPF_JITTER
@@ -2300,8 +2299,9 @@ bpf_tap(struct bpf_if *bp, u_char *pkt, u_int pktlen)
 	u_int slen;
 	int gottime;
 
+	NET_EPOCH_ASSERT();
+
 	gottime = BPF_TSTAMP_NONE;
-	NET_EPOCH_ENTER(et);
 	CK_LIST_FOREACH(d, &bp->bif_dlist, bd_next) {
 		counter_u64_add(d->bd_rcount, 1);
 		/*
@@ -2334,7 +2334,6 @@ bpf_tap(struct bpf_if *bp, u_char *pkt, u_int pktlen)
 			BPFD_UNLOCK(d);
 		}
 	}
-	NET_EPOCH_EXIT(et);
 }
 
 void
@@ -2355,7 +2354,6 @@ bpf_tap_if(if_t ifp, u_char *pkt, u_int pktlen)
 void
 bpf_mtap(struct bpf_if *bp, struct mbuf *m)
 {
-	struct epoch_tracker et;
 	struct bintime bt;
 	struct bpf_d *d;
 #ifdef BPF_JITTER
@@ -2363,6 +2361,8 @@ bpf_mtap(struct bpf_if *bp, struct mbuf *m)
 #endif
 	u_int pktlen, slen;
 	int gottime;
+
+	NET_EPOCH_ASSERT();
 
 	/* Skip outgoing duplicate packets. */
 	if ((m->m_flags & M_PROMISC) != 0 && m_rcvif(m) == NULL) {
@@ -2373,7 +2373,6 @@ bpf_mtap(struct bpf_if *bp, struct mbuf *m)
 	pktlen = m_length(m, NULL);
 	gottime = BPF_TSTAMP_NONE;
 
-	NET_EPOCH_ENTER(et);
 	CK_LIST_FOREACH(d, &bp->bif_dlist, bd_next) {
 		if (BPF_CHECK_DIRECTION(d, m_rcvif(m), bp->bif_ifp))
 			continue;
@@ -2401,7 +2400,6 @@ bpf_mtap(struct bpf_if *bp, struct mbuf *m)
 			BPFD_UNLOCK(d);
 		}
 	}
-	NET_EPOCH_EXIT(et);
 }
 
 void
@@ -2420,12 +2418,13 @@ bpf_mtap_if(if_t ifp, struct mbuf *m)
 void
 bpf_mtap2(struct bpf_if *bp, void *data, u_int dlen, struct mbuf *m)
 {
-	struct epoch_tracker et;
 	struct bintime bt;
 	struct mbuf mb;
 	struct bpf_d *d;
 	u_int pktlen, slen;
 	int gottime;
+
+	NET_EPOCH_ASSERT();
 
 	/* Skip outgoing duplicate packets. */
 	if ((m->m_flags & M_PROMISC) != 0 && m->m_pkthdr.rcvif == NULL) {
@@ -2447,7 +2446,6 @@ bpf_mtap2(struct bpf_if *bp, void *data, u_int dlen, struct mbuf *m)
 
 	gottime = BPF_TSTAMP_NONE;
 
-	NET_EPOCH_ENTER(et);
 	CK_LIST_FOREACH(d, &bp->bif_dlist, bd_next) {
 		if (BPF_CHECK_DIRECTION(d, m->m_pkthdr.rcvif, bp->bif_ifp))
 			continue;
@@ -2467,7 +2465,6 @@ bpf_mtap2(struct bpf_if *bp, void *data, u_int dlen, struct mbuf *m)
 			BPFD_UNLOCK(d);
 		}
 	}
-	NET_EPOCH_EXIT(et);
 }
 
 void

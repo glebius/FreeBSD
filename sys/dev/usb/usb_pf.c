@@ -387,6 +387,7 @@ usbpf_xfer_precompute_size(struct usb_xfer *xfer, int type)
 void
 usbpf_xfertap(struct usb_xfer *xfer, int type)
 {
+	struct epoch_tracker et;
 	struct usb_bus *bus;
 	struct usbpf_pkthdr *up;
 	struct usbpf_framehdr *uf;
@@ -525,7 +526,9 @@ usbpf_xfertap(struct usb_xfer *xfer, int type)
 		}
 	}
 
+	NET_EPOCH_ENTER(et);
 	bpf_tap_if(bus->ifp, buf, totlen);
+	NET_EPOCH_EXIT(et);
 
 	free(buf, M_TEMP);
 }
