@@ -2601,9 +2601,14 @@ device_probe_and_attach(device_t dev)
 int
 device_attach(device_t dev)
 {
+	const char *jname;
+	struct vnet *vnet;
 	uint64_t attachtime;
 	uint16_t attachentropy;
 	int error;
+
+	KASSERT(IS_DEFAULT_VNET(TD_TO_VNET(curthread)),
+	    ("device_attach: curthread is not in default vnet"));
 
 	if (resource_disabled(dev->driver->name, dev->unit)) {
 		/*
@@ -2618,10 +2623,27 @@ device_attach(device_t dev)
 		return (ENXIO);
 	}
 
-	KASSERT(IS_DEFAULT_VNET(TD_TO_VNET(curthread)),
-	    ("device_attach: curthread is not in default vnet"));
-	CURVNET_SET_QUIET(TD_TO_VNET(curthread));
+	if (resource_string_value(dev->driver->name, dev->unit, "jail",
+	    &jname) == 0) {
+		struct prison *pr;
 
+		sx_slock(&allprison_lock);
+		pr = prison_find_name(&prison0, jname);
+		sx_sunlock(&allprison_lock);
+		if (pr != NULL) {
+			vnet = pr->pr_vnet;
+			mtx_unlock(&pr->pr_mtx);
+		} else {
+			(void)device_set_driver(dev, NULL);
+			dev->state = DS_NOTPRESENT;
+			device_printf(dev,
+			    "attach delayed waiting for jail %s\n", jname);
+			return (ENXIO);
+		}
+	} else
+		vnet = TD_TO_VNET(curthread);
+
+	CURVNET_SET(vnet);
 	device_sysctl_init(dev);
 	if (!device_is_quiet(dev))
 		device_print_child(dev->parent, dev);
