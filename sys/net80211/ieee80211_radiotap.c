@@ -361,6 +361,16 @@ radiotap_offset(struct ieee80211_radiotap_header *rh,
 	return -1;
 }
 
+static bool
+bpf_ieee80211_chkdir(void *arg, const struct mbuf *m, int dir)
+{
+	struct ifnet *ifp = arg;
+	struct ifnet *rcvif = m_rcvif(m);
+
+	return ((dir == BPF_D_IN && ifp != rcvif) ||
+	    (dir == BPF_D_OUT && ifp == rcvif));
+}
+
 static void
 bpf_ieee80211_attach(void *sc)
 {
@@ -439,6 +449,7 @@ bpf_ieee80211_write(void *arg, struct mbuf *m, struct mbuf *mc, int flags)
 }
 
 static const struct bif_methods bpf_ieee80211_methods = {
+	.bif_chkdir = bpf_ieee80211_chkdir,
 	.bif_attachd = bpf_ieee80211_attach,
 	.bif_detachd = bpf_ieee80211_detach,
 	.bif_promisc = bpf_ifnet_promisc,
