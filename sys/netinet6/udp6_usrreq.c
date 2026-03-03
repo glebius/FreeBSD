@@ -989,9 +989,7 @@ static void
 udp6_abort(struct socket *so)
 {
 	struct inpcb *inp;
-	struct inpcbinfo *pcbinfo;
 
-	pcbinfo = udp_get_inpcbinfo(so->so_proto->pr_protocol);
 	inp = sotoinpcb(so);
 	KASSERT(inp != NULL, ("udp6_abort: inp == NULL"));
 
@@ -1005,9 +1003,7 @@ udp6_abort(struct socket *so)
 #endif
 
 	if (!IN6_IS_ADDR_UNSPECIFIED(&inp->in6p_faddr)) {
-		INP_HASH_WLOCK(pcbinfo);
 		in6_pcbdisconnect(inp);
-		INP_HASH_WUNLOCK(pcbinfo);
 		soisdisconnected(so);
 	}
 	INP_WUNLOCK(inp);
@@ -1107,9 +1103,7 @@ static void
 udp6_close(struct socket *so)
 {
 	struct inpcb *inp;
-	struct inpcbinfo *pcbinfo;
 
-	pcbinfo = udp_get_inpcbinfo(so->so_proto->pr_protocol);
 	inp = sotoinpcb(so);
 	KASSERT(inp != NULL, ("udp6_close: inp == NULL"));
 
@@ -1122,9 +1116,7 @@ udp6_close(struct socket *so)
 	}
 #endif
 	if (!IN6_IS_ADDR_UNSPECIFIED(&inp->in6p_faddr)) {
-		INP_HASH_WLOCK(pcbinfo);
 		in6_pcbdisconnect(inp);
-		INP_HASH_WUNLOCK(pcbinfo);
 		soisdisconnected(so);
 	}
 	INP_WUNLOCK(inp);
@@ -1246,9 +1238,7 @@ static int
 udp6_disconnect(struct socket *so)
 {
 	struct inpcb *inp;
-	struct inpcbinfo *pcbinfo;
 
-	pcbinfo = udp_get_inpcbinfo(so->so_proto->pr_protocol);
 	inp = sotoinpcb(so);
 	KASSERT(inp != NULL, ("udp6_disconnect: inp == NULL"));
 
@@ -1266,9 +1256,7 @@ udp6_disconnect(struct socket *so)
 		return (ENOTCONN);
 	}
 
-	INP_HASH_WLOCK(pcbinfo);
 	in6_pcbdisconnect(inp);
-	INP_HASH_WUNLOCK(pcbinfo);
 	SOCK_LOCK(so);
 	so->so_state &= ~SS_ISCONNECTED;		/* XXX */
 	SOCK_UNLOCK(so);
