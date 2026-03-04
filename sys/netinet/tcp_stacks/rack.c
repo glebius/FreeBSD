@@ -22106,10 +22106,9 @@ out:
 		 * Now for special SYN/FIN handling.
 		 */
 		if (flags & (TH_SYN | TH_FIN)) {
-			if ((flags & TH_SYN) &&
-			    ((tp->t_flags & TF_SENTSYN) == 0)) {
+			if ((flags & TH_SYN) && rack->sentsyn == 0) {
 				tp->snd_max++;
-				tp->t_flags |= TF_SENTSYN;
+				rack->sentsyn = 1;
 			}
 			if ((flags & TH_FIN) &&
 			    ((tp->t_flags & TF_SENTFIN) == 0)) {

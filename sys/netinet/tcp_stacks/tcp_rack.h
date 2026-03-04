@@ -729,7 +729,8 @@ struct tcp_rack {
 		set_pacing_done_a_iw : 1,
 		use_rack_rr : 1,
 		alloc_limit_reported : 1,
-		rack_avail : 2,
+		sentsyn : 1,
+		rack_avail : 1,
 		rc_force_max_seg : 1;
 	uint8_t r_early : 1,
 		r_late : 1,
