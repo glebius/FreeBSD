@@ -1049,11 +1049,9 @@ udp6_bind(struct socket *so, struct sockaddr *nam, struct thread *td)
 {
 	struct sockaddr_in6 *sin6_p;
 	struct inpcb *inp;
-	struct inpcbinfo *pcbinfo;
 	int error;
 	u_char vflagsav;
 
-	pcbinfo = udp_get_inpcbinfo(so->so_proto->pr_protocol);
 	inp = sotoinpcb(so);
 	KASSERT(inp != NULL, ("udp6_bind: inp == NULL"));
 
@@ -1065,7 +1063,6 @@ udp6_bind(struct socket *so, struct sockaddr *nam, struct thread *td)
 	sin6_p = (struct sockaddr_in6 *)nam;
 
 	INP_WLOCK(inp);
-	INP_HASH_WLOCK(pcbinfo);
 	vflagsav = inp->inp_vflag;
 	inp->inp_vflag &= ~INP_IPV4;
 	inp->inp_vflag |= INP_IPV6;
@@ -1094,7 +1091,6 @@ out:
 #endif
 	if (error != 0)
 		inp->inp_vflag = vflagsav;
-	INP_HASH_WUNLOCK(pcbinfo);
 	INP_WUNLOCK(inp);
 	return (error);
 }
