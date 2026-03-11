@@ -1089,8 +1089,8 @@ in_pcbconnect(struct inpcb *inp, struct sockaddr_in *sin, struct ucred *cred)
 	int error;
 	bool anonport;
 
+	NET_EPOCH_ASSERT();
 	INP_WLOCK_ASSERT(inp);
-	INP_HASH_WLOCK_ASSERT(inp->inp_pcbinfo);
 	KASSERT(in_nullhost(inp->inp_faddr),
 	    ("%s: inp is already connected", __func__));
 	KASSERT(sin->sin_family == AF_INET,
@@ -1127,10 +1127,13 @@ in_pcbconnect(struct inpcb *inp, struct sockaddr_in *sin, struct ucred *cred)
 	} else
 		faddr = sin->sin_addr;
 
+	INP_HASH_WLOCK(inp->inp_pcbinfo);
 	if (in_nullhost(inp->inp_laddr)) {
 		error = in_pcbladdr(inp, &faddr, &laddr, cred);
-		if (error)
+		if (__predict_false(error)) {
+			INP_HASH_WUNLOCK(inp->inp_pcbinfo);
 			return (error);
+		}
 	} else
 		laddr = inp->inp_laddr;
 
@@ -1147,13 +1150,16 @@ in_pcbconnect(struct inpcb *inp, struct sockaddr_in *sin, struct ucred *cred)
 		error = in_pcb_lport_dest(inp, (struct sockaddr *)&lsin,
 		    &lport, (struct sockaddr *)&fsin, sin->sin_port, cred,
 		    INPLOOKUP_WILDCARD);
-		if (error)
+		if (__predict_false(error)) {
+			INP_HASH_WUNLOCK(inp->inp_pcbinfo);
 			return (error);
+		}
 	} else if (in_pcblookup_hash_locked(inp->inp_pcbinfo, faddr,
 	    sin->sin_port, laddr, inp->inp_lport, 0, M_NODOM, RT_ALL_FIBS) !=
-	    NULL)
+	    NULL) {
+		INP_HASH_WUNLOCK(inp->inp_pcbinfo);
 		return (EADDRINUSE);
-	else
+	} else
 		lport = inp->inp_lport;
 
 	MPASS(!in_nullhost(inp->inp_laddr) || inp->inp_lport != 0 ||
@@ -1169,6 +1175,8 @@ in_pcbconnect(struct inpcb *inp, struct sockaddr_in *sin, struct ucred *cred)
 		MPASS(error == 0);
 	} else
 		in_pcbrehash(inp);
+	INP_HASH_WUNLOCK(inp->inp_pcbinfo);
+
 #ifdef ROUTE_MPATH
 	if (CALC_FLOWID_OUTBOUND) {
 		uint32_t hash_val, hash_type;
