@@ -33,7 +33,7 @@
 #include <sys/buf_ring.h>
 
 struct buf_ring *
-buf_ring_alloc(int count, struct malloc_type *type, int flags, struct mtx *lock)
+buf_ring_alloc(int count, struct malloc_type *type, int flags, lock_object_t lo)
 {
 	struct buf_ring *br;
 
@@ -43,9 +43,7 @@ buf_ring_alloc(int count, struct malloc_type *type, int flags, struct mtx *lock)
 	    type, flags | M_ZERO);
 	if (br == NULL)
 		return (NULL);
-#ifdef DEBUG_BUFRING
-	br->br_lock = lock;
-#endif	
+	br->br_lock = lo.lo;
 	br->br_prod_size = br->br_cons_size = count;
 	br->br_prod_mask = br->br_cons_mask = count-1;
 	br->br_prod_head = br->br_cons_head = 0;

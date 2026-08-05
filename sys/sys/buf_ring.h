@@ -36,9 +36,8 @@
 #include <machine/atomic.h>
 #include <machine/cpu.h>
 
-#if defined(DEBUG_BUFRING) && defined(_KERNEL)
+#if defined(_KERNEL)
 #include <sys/lock.h>
-#include <sys/mutex.h>
 #endif
 
 /*
@@ -60,8 +59,12 @@ struct buf_ring {
 	uint32_t		br_cons_tail;
 	int		 	br_cons_size;
 	int              	br_cons_mask;
-#if defined(DEBUG_BUFRING) && defined(_KERNEL)
-	struct mtx		*br_lock;
+#if defined(_KERNEL)
+	struct lock_object	*br_lock;
+#define	BR_LOCK_ASSERT(br)	\
+	LOCK_CLASS((br)->br_lock)->lc_assert((br)->br_lock, LA_XLOCKED)
+#else
+#define	BR_LOCK_ASSERT(br)	do {} while (0)
 #endif	
 	void			*br_ring[0] __aligned(CACHE_LINE_SIZE);
 };
@@ -195,6 +198,8 @@ buf_ring_dequeue_sc(struct buf_ring *br)
 	uint32_t prod_tail, mask;
 	void *buf;
 
+	BR_LOCK_ASSERT(br);
+
 	mask = br->br_cons_mask;
 	cons_head = atomic_load_32(&br->br_cons_head);
 	prod_tail = atomic_load_acq_32(&br->br_prod_tail);
@@ -210,10 +215,6 @@ buf_ring_dequeue_sc(struct buf_ring *br)
 
 #ifdef DEBUG_BUFRING
 	br->br_ring[cons_idx] = NULL;
-#ifdef _KERNEL
-	if (!mtx_owned(br->br_lock))
-		panic("lock not held on single consumer dequeue");
-#endif
 	if (atomic_load_32(&br->br_cons_tail) != cons_head)
 		panic("inconsistent list cons_tail=%d cons_head=%d",
 		    atomic_load_32(&br->br_cons_tail), cons_head);
@@ -287,10 +288,11 @@ buf_ring_peek(struct buf_ring *br)
 {
 	uint32_t cons_head, prod_tail, mask;
 
-#if defined(DEBUG_BUFRING) && defined(_KERNEL)
-	if ((br->br_lock != NULL) && !mtx_owned(br->br_lock))
-		panic("lock not held on single consumer dequeue");
-#endif	
+#ifdef _KERNEL
+	if (br->br_lock != NULL)
+		BR_LOCK_ASSERT(br);
+#endif
+
 	mask = br->br_cons_mask;
 	prod_tail = atomic_load_acq_32(&br->br_prod_tail);
 	cons_head = atomic_load_32(&br->br_cons_head);
@@ -307,10 +309,7 @@ buf_ring_peek_clear_sc(struct buf_ring *br)
 	uint32_t cons_head, prod_tail, mask;
 	void *buf;
 
-#if defined(DEBUG_BUFRING) && defined(_KERNEL)
-	if (!mtx_owned(br->br_lock))
-		panic("lock not held on single consumer dequeue");
-#endif	
+	BR_LOCK_ASSERT(br);
 
 	mask = br->br_cons_mask;
 	prod_tail = atomic_load_acq_32(&br->br_prod_tail);
@@ -356,7 +355,7 @@ buf_ring_count(struct buf_ring *br)
 
 #ifdef _KERNEL
 struct buf_ring *buf_ring_alloc(int count, struct malloc_type *type, int flags,
-    struct mtx *);
+    lock_object_t);
 void buf_ring_free(struct buf_ring *br, struct malloc_type *type);
 #else
 

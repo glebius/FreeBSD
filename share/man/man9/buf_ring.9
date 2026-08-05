@@ -42,7 +42,7 @@
 .In sys/param.h
 .In sys/buf_ring.h
 .Ft struct buf_ring *
-.Fn buf_ring_alloc "int count" "struct malloc_type *type" "int flags" "struct mtx *sc_lock"
+.Fn buf_ring_alloc "int count" "struct malloc_type *type" "int flags" "lock_object_t lock"
 .Ft void
 .Fn buf_ring_free "struct buf_ring *br" "struct malloc_type *type"
 .Ft int
@@ -74,7 +74,11 @@ slots using malloc_type
 and memory flags
 .Fa flags .
 The single consumer interface is protected by
-.Fa sc_lock .
+.Fa lock .
+Supported lock types are
+.Xr mutex 9
+and
+.Xr rwlock 9 .
 .Pp
 The
 .Fn buf_ring_free
