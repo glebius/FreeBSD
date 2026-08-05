@@ -36,9 +36,7 @@
 #include <sys/_lock.h>
 #include <sys/_mutex.h>
 
-#define	_WANT_NETISR_INTERNAL
 #include <net/netisr.h>
-#include <net/netisr_internal.h>
 
 #include <stdint.h>
 #include <stdio.h>
@@ -71,10 +69,6 @@ static u_int				 workstream_array_len;
 static struct sysctl_netisr_work	*work_array;
 static u_int				 work_array_len;
 
-static u_int				*nws_array;
-
-static u_int				 maxprot;
-
 static void
 netisr_dispatch_policy_to_string(u_int policy, char *buf,
     size_t buflen)
@@ -101,24 +95,6 @@ netisr_dispatch_policy_to_string(u_int policy, char *buf,
 	snprintf(buf, buflen, "%s", str);
 }
 
-/*
- * Load a nul-terminated string from KVM up to 'limit', guarantee that the
- * string in local memory is nul-terminated.
- */
-static void
-netisr_load_kvm_string(uintptr_t addr, char *dest, u_int limit)
-{
-	u_int i;
-
-	for (i = 0; i < limit; i++) {
-		if (kread(addr + i, &dest[i], sizeof(dest[i])) != 0)
-			xo_errx(EX_OSERR, "%s: kread()", __func__);
-		if (dest[i] == '\0')
-			break;
-	}
-	dest[limit - 1] = '\0';
-}
-
 static const char *
 netisr_proto2name(u_int proto)
 {
@@ -141,23 +117,6 @@ netisr_protoispresent(u_int proto)
 			return (1);
 	}
 	return (0);
-}
-
-static void
-netisr_load_kvm_config(void)
-{
-	u_int tmp;
-
-	kread(nl[N_NETISR_BINDTHREADS].n_value, &bindthreads, sizeof(u_int));
-	kread(nl[N_NETISR_MAXTHREADS].n_value, &maxthreads, sizeof(u_int));
-	kread(nl[N_NWS_COUNT].n_value, &numthreads, sizeof(u_int));
-	kread(nl[N_NETISR_DEFAULTQLIMIT].n_value, &defaultqlimit,
-	    sizeof(u_int));
-	kread(nl[N_NETISR_MAXQLIMIT].n_value, &maxqlimit, sizeof(u_int));
-	kread(nl[N_NETISR_DISPATCH_POLICY].n_value, &tmp, sizeof(u_int));
-
-	netisr_dispatch_policy_to_string(tmp, dispatch_policy,
-	    sizeof(dispatch_policy));
 }
 
 static void
@@ -199,65 +158,6 @@ netisr_load_sysctl_config(void)
 }
 
 static void
-netisr_load_kvm_proto(void)
-{
-	struct netisr_proto *np_array, *npp;
-	u_int i, protocount;
-	struct sysctl_netisr_proto *snpp;
-	size_t len;
-
-	/*
-	 * Kernel compile-time and user compile-time definitions of
-	 * NETISR_MAXPROT must match, as we use that to size work arrays.
-	 */
-	kread(nl[N_NETISR_MAXPROT].n_value, &maxprot, sizeof(u_int));
-	if (maxprot != NETISR_MAXPROT)
-		xo_errx(EX_DATAERR, "%s: NETISR_MAXPROT mismatch", __func__);
-	len = maxprot * sizeof(*np_array);
-	np_array = malloc(len);
-	if (np_array == NULL)
-		xo_err(EX_OSERR, "%s: malloc", __func__);
-	if (kread(nl[N_NETISR_PROTO].n_value, np_array, len) != 0)
-		xo_errx(EX_DATAERR, "%s: kread(_netisr_proto)", __func__);
-
-	/*
-	 * Size and allocate memory to hold only live protocols.
-	 */
-	protocount = 0;
-	for (i = 0; i < maxprot; i++) {
-		if (np_array[i].np_name == NULL)
-			continue;
-		protocount++;
-	}
-	proto_array = calloc(protocount, sizeof(*proto_array));
-	if (proto_array == NULL)
-		xo_err(EX_OSERR, "malloc");
-	protocount = 0;
-	for (i = 0; i < maxprot; i++) {
-		npp = &np_array[i];
-		if (npp->np_name == NULL)
-			continue;
-		snpp = &proto_array[protocount];
-		snpp->snp_version = sizeof(*snpp);
-		netisr_load_kvm_string((uintptr_t)npp->np_name,
-		    snpp->snp_name, sizeof(snpp->snp_name));
-		snpp->snp_proto = i;
-		snpp->snp_qlimit = npp->np_qlimit;
-		snpp->snp_policy = npp->np_policy;
-		snpp->snp_dispatch = npp->np_dispatch;
-		if (npp->np_m2flow != NULL)
-			snpp->snp_flags |= NETISR_SNP_FLAGS_M2FLOW;
-		if (npp->np_m2cpuid != NULL)
-			snpp->snp_flags |= NETISR_SNP_FLAGS_M2CPUID;
-		if (npp->np_drainedcpu != NULL)
-			snpp->snp_flags |= NETISR_SNP_FLAGS_DRAINEDCPU;
-		protocount++;
-	}
-	proto_array_len = protocount;
-	free(np_array);
-}
-
-static void
 netisr_load_sysctl_proto(void)
 {
 	size_t len;
@@ -278,68 +178,6 @@ netisr_load_sysctl_proto(void)
 		xo_errx(EX_DATAERR, "net.isr.proto: no data");
 	if (proto_array[0].snp_version != sizeof(proto_array[0]))
 		xo_errx(EX_DATAERR, "net.isr.proto: invalid version");
-}
-
-static void
-netisr_load_kvm_workstream(void)
-{
-	struct netisr_workstream nws;
-	struct sysctl_netisr_workstream *snwsp;
-	struct sysctl_netisr_work *snwp;
-	struct netisr_work *nwp;
-	u_int counter, cpuid, proto, wsid;
-	size_t len;
-
-	len = numthreads * sizeof(*nws_array);
-	nws_array = malloc(len);
-	if (nws_array == NULL)
-		xo_err(EX_OSERR, "malloc");
-	if (kread(nl[N_NWS_ARRAY].n_value, nws_array, len) != 0)
-		xo_errx(EX_OSERR, "%s: kread(_nws_array)", __func__);
-	workstream_array = calloc(numthreads, sizeof(*workstream_array));
-	if (workstream_array == NULL)
-		xo_err(EX_OSERR, "calloc");
-	workstream_array_len = numthreads;
-	work_array = calloc(numthreads * proto_array_len, sizeof(*work_array));
-	if (work_array == NULL)
-		xo_err(EX_OSERR, "calloc");
-	counter = 0;
-	for (wsid = 0; wsid < numthreads; wsid++) {
-		cpuid = nws_array[wsid];
-		kset_dpcpu(cpuid);
-		if (kread(nl[N_NWS].n_value, &nws, sizeof(nws)) != 0)
-			xo_errx(EX_OSERR, "%s: kread(nw)", __func__);
-		snwsp = &workstream_array[wsid];
-		snwsp->snws_version = sizeof(*snwsp);
-		snwsp->snws_wsid = cpuid;
-		snwsp->snws_cpu = cpuid;
-		if (nws.nws_intr_event != NULL)
-			snwsp->snws_flags |= NETISR_SNWS_FLAGS_INTR;
-
-		/*
-		 * Extract the CPU's per-protocol work information.
-		 */
-		xo_emit("counting to maxprot: {:maxprot/%u}\n", maxprot);
-		for (proto = 0; proto < maxprot; proto++) {
-			if (!netisr_protoispresent(proto))
-				continue;
-			nwp = &nws.nws_work[proto];
-			snwp = &work_array[counter];
-			snwp->snw_version = sizeof(*snwp);
-			snwp->snw_wsid = cpuid;
-			snwp->snw_proto = proto;
-			snwp->snw_len = nwp->nw_len;
-			snwp->snw_watermark = nwp->nw_watermark;
-			snwp->snw_dispatched = nwp->nw_dispatched;
-			snwp->snw_hybrid_dispatched =
-			    nwp->nw_hybrid_dispatched;
-			snwp->snw_qdrops = nwp->nw_qdrops;
-			snwp->snw_queued = nwp->nw_queued;
-			snwp->snw_handled = nwp->nw_handled;
-			counter++;
-		}
-	}
-	work_array_len = counter;
 }
 
 static void
@@ -447,16 +285,13 @@ netisr_stats(void)
 	struct sysctl_netisr_proto *snpp;
 	u_int i;
 
-	if (live) {
-		netisr_load_sysctl_config();
-		netisr_load_sysctl_proto();
-		netisr_load_sysctl_workstream();
-		netisr_load_sysctl_work();
-	} else {
-		netisr_load_kvm_config();
-		netisr_load_kvm_proto();
-		netisr_load_kvm_workstream();		/* Also does work. */
-	}
+	if (!live)
+		return;
+
+	netisr_load_sysctl_config();
+	netisr_load_sysctl_proto();
+	netisr_load_sysctl_workstream();
+	netisr_load_sysctl_work();
 
 	xo_open_container("netisr");
 

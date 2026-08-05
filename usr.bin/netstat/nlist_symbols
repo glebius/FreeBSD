@@ -18,13 +18,6 @@ all	_mfctablesize
 all	_mif6table
 all	_mrt6stat
 all	_mrtstat
-all	_netisr_bindthreads
-all	_netisr_defaultqlimit
-all	_netisr_dispatch_policy
-all	_netisr_maxprot
-all	_netisr_maxqlimit
-all	_netisr_maxthreads
-all	_netisr_proto
 all	_ngsocklist
 all	_nws
 all	_nws_array

@@ -51,6 +51,9 @@
 #   xargs -n1 | sort | uniq -d;
 # done
 
+# 2026XXXX: netisr_internal.h removed
+OLD_FILES+=usr/include/net/netisr_internal.h
+
 # 20260811: libusb symbol versioning, shared library bumped to version 4
 OLD_LIBS+=usr/lib/libusb.so.3
 

@@ -88,13 +88,79 @@
 #include <ddb/ddb.h>
 #endif
 
-#define	_WANT_NETISR_INTERNAL	/* Enable definitions from netisr_internal.h */
 #include <net/if.h>
 #include <net/if_var.h>
 #include <net/if_private.h>
 #include <net/netisr.h>
-#include <net/netisr_internal.h>
 #include <net/vnet.h>
+
+/*
+ * Each protocol is described by a struct netisr_proto, which holds all
+ * global per-protocol information.  This data structure is set up by
+ * netisr_register(), and derived from the public struct netisr_handler.
+ */
+struct netisr_proto {
+	const char	*np_name;	/* Character string protocol name. */
+	netisr_handler_t *np_handler;	/* Protocol handler. */
+	netisr_m2flow_t	*np_m2flow;	/* Query flow for untagged packet. */
+	netisr_m2cpuid_t *np_m2cpuid;	/* Query CPU to process packet on. */
+	netisr_drainedcpu_t *np_drainedcpu; /* Callback when drained a queue. */
+	u_int		 np_qlimit;	/* Maximum per-CPU queue depth. */
+	u_int		 np_policy;	/* Work placement policy. */
+	u_int		 np_dispatch;	/* Work dispatch policy. */
+};
+
+/*
+ * Workstreams hold a queue of ordered work across each protocol, and are
+ * described by netisr_workstream.  Each workstream is associated with a
+ * worker thread, which in turn is pinned to a CPU.  Work associated with a
+ * workstream can be processd in other threads during direct dispatch;
+ * concurrent processing is prevented by the NWS_RUNNING flag, which
+ * indicates that a thread is already processing the work queue.  It is
+ * important to prevent a directly dispatched packet from "skipping ahead" of
+ * work already in the workstream queue.
+ */
+#define	NETISR_MAXPROT	16		/* Compile-time limit. */
+struct netisr_workstream {
+	struct intr_event *nws_intr_event;	/* Handler for stream. */
+	void		*nws_swi_cookie;	/* swi(9) cookie for stream. */
+	struct mtx	 nws_mtx;		/* Synchronize work. */
+	u_int		 nws_cpu;		/* CPU pinning. */
+	u_int		 nws_flags;		/* Wakeup flags. */
+	u_int		 nws_pendingbits;	/* Scheduled protocols. */
+
+	/*
+	 * Protocol-specific work for each workstream is described by struct
+	 * netisr_work.  Each work descriptor consists of an mbuf queue and
+	 * statistics.
+	 */
+	struct netisr_work {
+		/*
+		 * Packet queue, linked by m_nextpkt.
+		 */
+		struct mbuf	*nw_head;
+		struct mbuf	*nw_tail;
+		u_int		 nw_len;
+		u_int		 nw_qlimit;
+		u_int		 nw_watermark;
+
+		/*
+		 * Statistics -- written unlocked, but mostly from curcpu.
+		 */
+		uint64_t nw_dispatched; /* Number of direct dispatches. */
+		uint64_t nw_hybrid_dispatched; /* "" hybrid dispatches. */
+		uint64_t nw_qdrops;	/* "" drops. */
+		uint64_t nw_queued;	/* "" enqueues. */
+		uint64_t nw_handled;	/* "" handled in worker. */
+	} nws_work[NETISR_MAXPROT];
+} __aligned(CACHE_LINE_SIZE);
+
+/*
+ * Per-workstream flags.
+ */
+#define	NWS_RUNNING	0x00000001	/* Currently running in a thread. */
+#define	NWS_DISPATCHING	0x00000002	/* Currently being direct-dispatched. */
+#define	NWS_SCHEDULED	0x00000004	/* Signal issued. */
 
 /*-
  * Synchronize use and modification of the registered netisr data structures;
@@ -209,7 +275,7 @@ SYSCTL_UINT(_net_isr, OID_AUTO, maxprot, CTLFLAG_RD,
 
 /*
  * The netisr_proto array describes all registered protocols, indexed by
- * protocol number.  See netisr_internal.h for more details.
+ * protocol number.
  */
 static struct netisr_proto	netisr_proto[NETISR_MAXPROT];
 
@@ -231,7 +297,7 @@ VNET_DEFINE_STATIC(u_int,	netisr_enable[NETISR_MAXPROT]);
 #endif
 
 /*
- * Per-CPU workstream data.  See netisr_internal.h for more details.
+ * Per-CPU workstream data.
  */
 DPCPU_DEFINE(struct netisr_workstream, nws);
 
