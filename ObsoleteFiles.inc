@@ -51,6 +51,9 @@
 #   xargs -n1 | sort | uniq -d;
 # done
 
+# 2026XXXX: netisr_internal.h removed
+OLD_FILES+=usr/include/net/netisr_internal.h
+
 # 20261012: Removed <sys/kpilite.h>
 OLD_FILES+=usr/include/sys/kpilite.h
 
