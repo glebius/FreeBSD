@@ -38,6 +38,10 @@
 
 #if defined(_KERNEL)
 #include <sys/lock.h>
+#include <sys/counter.h>
+#else
+typedef uint64_t counter_u64_t;
+#define	counter_u64_add(c,v)	do { (c) += (v); } while (0)
 #endif
 
 /*
@@ -54,7 +58,7 @@ struct buf_ring {
 	uint32_t		br_prod_tail;
 	int              	br_prod_size;
 	int              	br_prod_mask;
-	uint64_t		br_drops;
+	counter_u64_t		br_drops;
 	uint32_t		br_cons_head __aligned(CACHE_LINE_SIZE);
 	uint32_t		br_cons_tail;
 	int		 	br_cons_size;
@@ -112,8 +116,8 @@ buf_ring_enqueue(struct buf_ring *br, void *buf)
 		if ((int32_t)(cons_tail + br->br_prod_size - prod_next) < 1) {
 			if (prod_head == atomic_load_32(&br->br_prod_head) &&
 			    cons_tail == atomic_load_32(&br->br_cons_tail)) {
-				br->br_drops++;
 				critical_exit();
+				counter_u64_add(br->br_drops, 1);
 				return (ENOBUFS);
 			}
 			continue;
@@ -357,8 +361,14 @@ buf_ring_count(struct buf_ring *br)
 struct buf_ring *buf_ring_alloc(int count, struct malloc_type *type, int flags,
     lock_object_t);
 void buf_ring_free(struct buf_ring *br, struct malloc_type *type);
-#else
 
+static inline uint64_t
+buf_ring_drops(struct buf_ring *br)
+{
+	return (counter_u64_fetch(br->br_drops));
+}
+
+#else /* !_KERNEL */
 #include <stdlib.h>
 
 static inline struct buf_ring *
@@ -382,6 +392,12 @@ static inline void
 buf_ring_free(struct buf_ring *br)
 {
 	free(br);
+}
+
+static inline uint64_t
+buf_ring_drops(struct buf_ring *br)
+{
+	return (br->br_drops);
 }
 
 #endif /* !_KERNEL */

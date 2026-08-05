@@ -30,6 +30,7 @@
 #include <sys/systm.h>
 #include <sys/kernel.h>
 #include <sys/malloc.h>
+#include <sys/counter.h>
 #include <sys/buf_ring.h>
 
 struct buf_ring *
@@ -43,6 +44,11 @@ buf_ring_alloc(int count, struct malloc_type *type, int flags, lock_object_t lo)
 	    type, flags | M_ZERO);
 	if (br == NULL)
 		return (NULL);
+	br->br_drops = counter_u64_alloc(flags);
+	if (br->br_drops == NULL) {
+		free(br, type);
+		return (NULL);
+	}
 	br->br_lock = lo.lo;
 	br->br_prod_size = br->br_cons_size = count;
 	br->br_prod_mask = br->br_cons_mask = count-1;
@@ -55,5 +61,6 @@ buf_ring_alloc(int count, struct malloc_type *type, int flags, lock_object_t lo)
 void
 buf_ring_free(struct buf_ring *br, struct malloc_type *type)
 {
+	counter_u64_free(br->br_drops);
 	free(br, type);
 }
