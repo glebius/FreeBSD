@@ -221,7 +221,7 @@ typedef enum {
 /*
  * Features available in each chip type.
  */
-typedef enum {
+typedef enum __attribute__((flag_enum)) {
 	AHD_FENONE		= 0x00000,
 	AHD_WIDE  		= 0x00001,/* Wide Channel */
 	AHD_MULTI_FUNC		= 0x00100,/* Multi-Function/Channel Device */
@@ -240,7 +240,7 @@ typedef enum {
 /*
  * Bugs in the silicon that we work around in software.
  */
-typedef enum {
+typedef enum __attribute__((flag_enum)) {
 	AHD_BUGNONE		= 0x0000,
 	/*
 	 * Rev A hardware fails to update LAST/CURR/NEXTSCB
@@ -337,7 +337,7 @@ typedef enum {
  * The driver determines these settings by probing the
  * chip/controller's configuration.
  */
-typedef enum {
+typedef enum __attribute__((flag_enum)) {
 	AHD_FNONE	      = 0x00000,
 	AHD_BOOT_CHANNEL      = 0x00001,/* We were set as the boot channel. */
 	AHD_USEDEFAULTS	      = 0x00004,/*
@@ -560,7 +560,7 @@ struct map_node {
 /*
  * The current state of this SCB.
  */
-typedef enum {
+typedef enum __attribute__((flag_enum)) {
 	SCB_FLAG_NONE		= 0x00000,
 	SCB_TRANSMISSION_ERROR	= 0x00001,/*
 					   * We detected a parity or CRC
@@ -991,7 +991,7 @@ int		ahd_acquire_seeprom(struct ahd_softc *ahd);
 void		ahd_release_seeprom(struct ahd_softc *ahd);
 
 /****************************  Message Buffer *********************************/
-typedef enum {
+typedef enum __attribute__((flag_enum)) {
 	MSG_FLAG_NONE			= 0x00,
 	MSG_FLAG_EXPECT_PPR_BUSFREE	= 0x01,
 	MSG_FLAG_IU_REQ_CHANGED		= 0x02,
@@ -1041,7 +1041,7 @@ struct ahd_suspend_state {
 
 typedef void (*ahd_bus_intr_t)(struct ahd_softc *);
 
-typedef enum {
+typedef enum __attribute__((flag_enum)) {
 	AHD_MODE_DFF0,
 	AHD_MODE_DFF1,
 	AHD_MODE_CCHAN,

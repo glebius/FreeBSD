@@ -188,7 +188,7 @@ aic7770_config(struct ahc_softc *ahc, struct aic7770_identity *entry, u_int io)
 
 		/* Get the primary channel information */
 		if ((biosctrl & CHANNEL_B_PRIMARY) != 0)
-			ahc->flags |= 1;
+			ahc->flags |= AHC_PRIMARY_CHANNEL;
 
 		if ((biosctrl & BIOSMODE) == BIOSDISABLED) {
 			ahc->flags |= AHC_USEDEFAULTS;

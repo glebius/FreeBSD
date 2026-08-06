@@ -134,8 +134,8 @@ ahd_update_modes(struct ahd_softc *ahd)
 }
 
 static __inline void
-ahd_assert_modes(struct ahd_softc *ahd, ahd_mode srcmode,
-		 ahd_mode dstmode, const char *file, int line)
+ahd_assert_modes(struct ahd_softc *ahd, u_int srcmode,
+		 u_int dstmode, const char *file, int line)
 {
 #ifdef AHD_DEBUG
 	if ((srcmode & AHD_MK_MSK(ahd->src_mode)) == 0

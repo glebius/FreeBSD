@@ -215,7 +215,7 @@ typedef enum {
 /*
  * Features available in each chip type.
  */
-typedef enum {
+typedef enum __attribute__((flag_enum)) {
 	AHC_FENONE	= 0x00000,
 	AHC_ULTRA	= 0x00001,	/* Supports 20MHz Transfers */
 	AHC_ULTRA2	= 0x00002,	/* Supports 40MHz Transfers */
@@ -273,7 +273,7 @@ typedef enum {
 /*
  * Bugs in the silicon that we work around in software.
  */
-typedef enum {
+typedef enum __attribute__((flag_enum)) {
 	AHC_BUGNONE		= 0x00,
 	/*
 	 * On all chips prior to the U2 product line,
@@ -320,9 +320,9 @@ typedef enum {
  * The driver determines these settings by probing the
  * chip/controller's configuration.
  */
-typedef enum {
+typedef enum __attribute__((flag_enum)) {
 	AHC_FNONE	      = 0x000,
-	AHC_PRIMARY_CHANNEL   = 0x003,  /*
+	AHC_PRIMARY_CHANNEL   = 0x001,  /*
 					 * The channel that should
 					 * be probed first.
 					 */
@@ -535,7 +535,7 @@ struct sg_map_node {
 /*
  * The current state of this SCB.
  */
-typedef enum {
+typedef enum __attribute__((flag_enum)) {
 	SCB_FLAG_NONE		= 0x0000,
 	SCB_OTHERTCL_TIMEOUT	= 0x0002,/*
 					  * Another device was active
