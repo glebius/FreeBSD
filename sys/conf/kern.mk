@@ -24,6 +24,7 @@ NO_WUNNEEDED_INTERNAL_DECL=	-Wno-error=unneeded-internal-declaration
 NO_WSOMETIMES_UNINITIALIZED=	-Wno-error=sometimes-uninitialized
 NO_WCAST_QUAL=			-Wno-error=cast-qual
 NO_WTAUTOLOGICAL_POINTER_COMPARE= -Wno-tautological-pointer-compare
+NO_WASSIGN_ENUM=		-Wno-assign-enum
 .if ${COMPILER_VERSION} >= 100000
 NO_WMISLEADING_INDENTATION=	-Wno-misleading-indentation
 .endif
