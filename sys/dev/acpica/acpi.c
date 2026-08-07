@@ -3513,7 +3513,7 @@ acpi_sleep_disable(struct acpi_softc *sc)
     return (status);
 }
 
-enum acpi_sleep_state {
+enum __attribute__((flag_enum)) acpi_sleep_state {
     ACPI_SS_NONE	= 0,
     ACPI_SS_GPE_SET	= 1 << 0,
     ACPI_SS_DEV_SUSPEND	= 1 << 1,
