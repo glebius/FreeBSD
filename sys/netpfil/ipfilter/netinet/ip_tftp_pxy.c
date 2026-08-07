@@ -31,6 +31,7 @@ static	frentry_t	tftpfr;
 static	int		tftp_proxy_init = 0;
 
 typedef enum tftp_cmd_e {
+	TFTP_CMD_NONE = 0,
 	TFTP_CMD_READ = 1,
 	TFTP_CMD_WRITE = 2,
 	TFTP_CMD_DATA = 3,
@@ -238,7 +239,7 @@ ipf_p_tftp_new(void *arg, fr_info_t *fin __unused, ap_session_t *aps, nat_t *nat
 	ipn->in_ifnames[0] = np->in_ifnames[0];
 	ipn->in_ifnames[1] = np->in_ifnames[1];
 
-	ti->ti_lastcmd = 0;
+	ti->ti_lastcmd = TFTP_CMD_NONE;
 
 	return (0);
 }
