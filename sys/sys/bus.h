@@ -266,7 +266,7 @@ typedef void driver_intr_t(void *);
  * Buses may choose to modify or augment these flags as appropriate,
  * e.g. nexus may apply INTR_EXCL.
  */
-enum intr_type {
+enum __attribute__((flag_enum)) intr_type {
 	INTR_TYPE_TTY = 1,
 	INTR_TYPE_BIO = 2,
 	INTR_TYPE_NET = 4,
