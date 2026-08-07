@@ -60,7 +60,7 @@
  * supported by a particular device.  The default is all statistics are
  * supported.
  */
-typedef enum {
+typedef enum __attribute__((flag_enum)) {
 	DEVSTAT_ALL_SUPPORTED	= 0x00,
 	DEVSTAT_NO_BLOCKSIZE	= 0x01,
 	DEVSTAT_NO_ORDERED_TAGS	= 0x02,
