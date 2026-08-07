@@ -39,6 +39,7 @@
 #if defined(_KERNEL)
 #include <sys/lock.h>
 #include <sys/counter.h>
+#include <sys/epoch.h>
 #define	BR_LOCK_ASSERT(br)	\
 	LOCK_CLASS((br)->br_lock)->lc_assert((br)->br_lock, LA_XLOCKED)
 #else
@@ -56,12 +57,18 @@ typedef uint64_t counter_u64_t;
  * value wraps back to the expected value.
  *
  */
+typedef void br_epoch_free_t(void *);
 struct buf_ring {
 	uint32_t		br_prod_head;
 	uint32_t		br_prod_tail;
 	int              	br_prod_size;
 	int              	br_prod_mask;
 	counter_u64_t		br_drops;
+#if defined(_KERNEL)
+	struct epoch_context	br_epoch_ctx;
+	br_epoch_free_t		*br_epoch_free;
+	struct malloc_type	*br_malloc_type;
+#endif
 	uint32_t		br_cons_head __aligned(CACHE_LINE_SIZE);
 	uint32_t		br_cons_tail;
 	int		 	br_cons_size;
@@ -361,6 +368,7 @@ struct buf_ring *_buf_ring_alloc(int count, struct malloc_type *type,
 	struct rwlock *: _buf_ring_alloc((c), (mt), (f), lk2lo(lk)),	\
 	struct rmlock *: _buf_ring_alloc((c), (mt), (f), lk2lo(lk)))
 void buf_ring_free(struct buf_ring *br, struct malloc_type *type);
+void buf_ring_free_epoch(struct buf_ring *, epoch_t, br_epoch_free_t);
 
 static inline uint64_t
 buf_ring_drops(struct buf_ring *br)
