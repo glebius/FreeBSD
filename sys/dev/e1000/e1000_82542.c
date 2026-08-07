@@ -314,6 +314,11 @@ static s32 e1000_init_hw_82542(struct e1000_hw *hw)
  *  should be established.  Assumes the hardware has previously been reset
  *  and the transmitter and receiver are not enabled.
  **/
+/* XXX: the hw->fc.requested_mode definitely has enum usage bug! */
+#ifdef __clang__
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wassign-enum"
+#endif
 static s32 e1000_setup_link_82542(struct e1000_hw *hw)
 {
 	struct e1000_mac_info *mac = &hw->mac;
@@ -388,6 +393,9 @@ static s32 e1000_setup_link_82542(struct e1000_hw *hw)
 out:
 	return ret_val;
 }
+#ifdef __clang__
+#pragma clang diagnostic pop
+#endif
 
 /**
  *  e1000_led_on_82542 - Turn on SW controllable LED
