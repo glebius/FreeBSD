@@ -69,7 +69,7 @@ typedef enum {
 	NDA_STATE_NORMAL
 } nda_state;
 
-typedef enum {
+typedef enum __attribute__((flag_enum)) {
 	NDA_FLAG_OPEN		= 0x0001,
 	NDA_FLAG_DIRTY		= 0x0002,
 	NDA_FLAG_SCTX_INIT	= 0x0004,

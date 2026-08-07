@@ -44,7 +44,7 @@
 #include <cam/ctl/ctl_ioctl.h>
 #include <sys/nv.h>
 
-typedef enum {
+typedef enum __attribute__((flag_enum)) {
 	CTL_PORT_STATUS_NONE		= 0x00,
 	CTL_PORT_STATUS_ONLINE		= 0x01,
 	CTL_PORT_STATUS_HA_SHARED	= 0x02

@@ -84,7 +84,7 @@ typedef enum {
 	ADA_STATE_NORMAL
 } ada_state;
 
-typedef enum {
+typedef enum __attribute__((flag_enum)) {
 	ADA_FLAG_CAN_48BIT	= 0x00000002,
 	ADA_FLAG_CAN_FLUSHCACHE	= 0x00000004,
 	ADA_FLAG_CAN_NCQ	= 0x00000008,
@@ -139,7 +139,7 @@ typedef enum {
 	"\031UNMAPPEDIO"	\
 	"\032ROTATING"
 
-typedef enum {
+typedef enum __attribute__((flag_enum)) {
 	ADA_Q_NONE		= 0x00,
 	ADA_Q_4K		= 0x01,
 	ADA_Q_NCQ_TRIM_BROKEN	= 0x02,
@@ -178,7 +178,7 @@ typedef enum {
 	ADA_ZONE_HOST_MANAGED	= 0x03
 } ada_zone_mode;
 
-typedef enum {
+typedef enum __attribute__((flag_enum)) {
 	ADA_ZONE_FLAG_RZ_SUP		= 0x0001,
 	ADA_ZONE_FLAG_OPEN_SUP		= 0x0002,
 	ADA_ZONE_FLAG_CLOSE_SUP		= 0x0004,

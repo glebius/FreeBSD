@@ -110,7 +110,7 @@ struct ctlfe_lun_softc {
 	STAILQ_ENTRY(ctlfe_lun_softc) links;
 };
 
-typedef enum {
+typedef enum __attribute__((flag_enum)) {
 	CTLFE_CMD_NONE		= 0x00,
 	CTLFE_CMD_PIECEWISE	= 0x01
 } ctlfe_cmd_flags;

@@ -190,7 +190,7 @@ do {									\
 	(softc)->action = (newaction);					\
 } while(0)
 
-typedef enum {
+typedef enum __attribute__((flag_enum)) {
 	PROBE_INQUIRY_CKSUM	= 0x01,
 	PROBE_NO_ANNOUNCE	= 0x04,
 	PROBE_EXTLUN		= 0x08

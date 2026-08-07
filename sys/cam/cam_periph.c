@@ -1677,7 +1677,7 @@ camperiphscsisenseerror(union ccb *ccb, union ccb **orig,
 		error = ERESTART;
 		*action &= ~SSQ_PRINT_SENSE;
 	} else {
-		scsi_sense_action err_action;
+		int err_action;	/* XXX: scsi_sense_action */
 		struct ccb_getdev cgd;
 
 		/*

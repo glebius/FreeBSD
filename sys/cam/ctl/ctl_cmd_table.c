@@ -60,7 +60,12 @@
 /*
  * Whenever support for a new command is added, it should be added to these
  * tables.
+ * XXX: the table mixes flags from different enums, and makes the file not
+ * compilable with -Werror=assign-enum
  */
+#ifdef __clang__
+#pragma clang diagnostic ignored "-Wassign-enum"
+#endif
 
 /* 3B WRITE BUFFER */
 const struct ctl_cmd_entry ctl_cmd_table_3b[32] =

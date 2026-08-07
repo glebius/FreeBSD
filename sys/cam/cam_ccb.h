@@ -62,7 +62,7 @@ typedef enum {
 } ccb_alloc_flags;
 
 /* CAM CCB flags */
-typedef enum {
+typedef enum __attribute__((flag_enum)) {
 	CAM_CDB_POINTER		= 0x00000001,/* The CDB field is a pointer    */
 	CAM_unused1		= 0x00000002,
 	CAM_unused2		= 0x00000004,
@@ -547,16 +547,16 @@ typedef enum {
 	CAM_DEV_MATCH_ERROR
 } ccb_dev_match_status;
 
-typedef enum {
+typedef enum __attribute__((flag_enum)) {
 	CAM_DEV_POS_NONE	= 0x000,
 	CAM_DEV_POS_BUS		= 0x001,
 	CAM_DEV_POS_TARGET	= 0x002,
 	CAM_DEV_POS_DEVICE	= 0x004,
 	CAM_DEV_POS_PERIPH	= 0x008,
 	CAM_DEV_POS_PDPTR	= 0x010,
-	CAM_DEV_POS_TYPEMASK	= 0xf00,
 	CAM_DEV_POS_EDT		= 0x100,
-	CAM_DEV_POS_PDRV	= 0x200
+	CAM_DEV_POS_PDRV	= 0x200,
+	CAM_DEV_POS_TYPEMASK	= CAM_DEV_POS_EDT | CAM_DEV_POS_PDRV,
 } dev_pos_type;
 
 struct ccb_dm_cookie {
@@ -872,7 +872,7 @@ struct ccb_nvmeio {
 /*
  * Definitions for the asynchronous callback CCB fields.
  */
-typedef enum {
+typedef enum __attribute__((flag_enum)) {
 	AC_UNIT_ATTENTION	= 0x4000,/* Device reported UNIT ATTENTION */
 	AC_ADVINFO_CHANGED	= 0x2000,/* Advance info might have changes */
 	AC_CONTRACT		= 0x1000,/* A contractual callback */

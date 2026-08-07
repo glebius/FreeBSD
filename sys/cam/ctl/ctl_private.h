@@ -90,7 +90,7 @@ typedef enum {
  *        "OK_ON_BOTH"     == we have to have a lun configured
  *        "SA5"            == command has 5-bit service action at byte 1
  */
-typedef enum {
+typedef enum __attribute__((flag_enum)) {
 	CTL_CMD_FLAG_NONE		= 0x0000,
 	CTL_CMD_FLAG_NO_SENSE		= 0x0010,
 	CTL_CMD_FLAG_ALLOW_ON_RESV	= 0x0020,
@@ -146,7 +146,7 @@ struct ctl_nvme_cmd_entry {
 	ctl_io_flags		flags;
 };
 
-typedef enum {
+typedef enum __attribute__((flag_enum)) {
 	CTL_LUN_NONE		= 0x000,
 	CTL_LUN_CONTROL		= 0x001,
 	CTL_LUN_RESERVED	= 0x002,
@@ -186,7 +186,7 @@ typedef int	ctl_modesel_handler(struct ctl_scsiio *ctsio,
 				    struct ctl_page_index *page_index,
 				    uint8_t *page_ptr);
 
-typedef enum {
+typedef enum __attribute__((flag_enum)) {
 	CTL_PAGE_FLAG_NONE	 = 0x00,
 	CTL_PAGE_FLAG_DIRECT	 = 0x01,
 	CTL_PAGE_FLAG_PROC	 = 0x02,
@@ -368,7 +368,7 @@ struct ctl_lun {
 	TAILQ_HEAD(tpc_lists, tpc_list) tpc_lists;
 };
 
-typedef enum {
+typedef enum __attribute__((flag_enum)) {
 	CTL_FLAG_ACTIVE_SHELF	= 0x04
 } ctl_gen_flags;
 

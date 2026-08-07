@@ -97,7 +97,7 @@ typedef enum {
 	GP_OTHER,	/* Return what present, do not allocate/anchor. */
 } getpage_op_t;
 
-typedef enum {
+typedef enum __attribute__((flag_enum)) {
 	CTL_BE_RAMDISK_LUN_UNCONFIGURED	= 0x01,
 	CTL_BE_RAMDISK_LUN_WAITING	= 0x04
 } ctl_be_ramdisk_lun_flags;

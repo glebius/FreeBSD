@@ -100,7 +100,7 @@ typedef enum {
 	DA_STATE_NORMAL
 } da_state;
 
-typedef enum {
+typedef enum __attribute__((flag_enum)) {
 	DA_FLAG_PACK_INVALID	= 0x000001,
 	DA_FLAG_NEW_PACK	= 0x000002,
 	DA_FLAG_PACK_LOCKED	= 0x000004,
@@ -149,7 +149,7 @@ typedef enum {
 	"\025UNMAPPEDIO"	\
 	"\026LBP"		\
 
-typedef enum {
+typedef enum __attribute__((flag_enum)) {
 	DA_Q_NONE		= 0x00,
 	DA_Q_NO_SYNC_CACHE	= 0x01,
 	DA_Q_NO_6_BYTE		= 0x02,
@@ -245,7 +245,7 @@ typedef enum {
 	DA_ZONE_IF_ATA_SAT,
 } da_zone_interface;
 
-typedef enum {
+typedef enum __attribute__((flag_enum)) {
 	DA_ZONE_FLAG_RZ_SUP		= 0x0001,
 	DA_ZONE_FLAG_OPEN_SUP		= 0x0002,
 	DA_ZONE_FLAG_CLOSE_SUP		= 0x0004,

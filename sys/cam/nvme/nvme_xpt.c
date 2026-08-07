@@ -102,7 +102,7 @@ do {									\
 	(softc)->action = (newaction);					\
 } while(0)
 
-typedef enum {
+typedef enum __attribute__((flag_enum)) {
 	NVME_PROBE_NO_ANNOUNCE	= 0x04
 } nvme_probe_flags;
 

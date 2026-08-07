@@ -66,7 +66,7 @@
 
 #define PERIPH_NAME "pass"
 
-typedef enum {
+typedef enum __attribute__((flag_enum)) {
 	PASS_FLAG_OPEN			= 0x01,
 	PASS_FLAG_LOCKED		= 0x02,
 	PASS_FLAG_INVALID		= 0x04,

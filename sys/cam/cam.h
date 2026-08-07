@@ -326,20 +326,17 @@ typedef enum {
 	CAM_ESF_ALL		= 0xff
 } cam_error_string_flags;
 
-typedef enum {
+typedef enum __attribute__((flag_enum)) {
 	CAM_EPF_NONE		= 0x00,
 	CAM_EPF_MINIMAL		= 0x01,
 	CAM_EPF_NORMAL		= 0x02,
 	CAM_EPF_ALL		= 0x03,
-	CAM_EPF_LEVEL_MASK	= 0x0f
+	CAM_EPF_LEVEL_MASK	= CAM_EPF_MINIMAL | CAM_EPF_NORMAL |
+				  CAM_EPF_ALL,
 	/* All bits above bit 3 are protocol-specific */
-} cam_error_proto_flags;
-
-typedef enum {
-	CAM_ESF_PRINT_NONE	= 0x00,
 	CAM_ESF_PRINT_STATUS	= 0x10,
 	CAM_ESF_PRINT_SENSE	= 0x20
-} cam_error_scsi_flags;
+} cam_error_proto_flags;
 
 typedef enum {
 	CAM_ESMF_PRINT_NONE	= 0x00,

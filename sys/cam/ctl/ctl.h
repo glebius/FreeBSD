@@ -107,7 +107,7 @@ union ctl_modepage_info {
  * ctl_build_ua.  These are also listed in order of reporting priority.
  * i.e. a poweron UA is reported first, bus reset second, etc.
  */
-typedef enum {
+typedef enum __attribute__((flag_enum)) {
 	CTL_UA_NONE		= 0x0000,
 	CTL_UA_POWERON		= 0x0001,
 	CTL_UA_BUS_RESET	= 0x0002,

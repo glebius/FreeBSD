@@ -128,7 +128,7 @@ do {									\
 	(softc)->action = (newaction);					\
 } while(0)
 
-typedef enum {
+typedef enum __attribute__((flag_enum)) {
 	PROBE_NO_ANNOUNCE	= 0x04
 } aprobe_flags;
 

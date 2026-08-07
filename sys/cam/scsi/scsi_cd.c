@@ -99,7 +99,7 @@ typedef enum {
 	"\00510_BYTE_ONLY"	\
 	"\007RETRY_BUSY"
 
-typedef enum {
+typedef enum __attribute__((flag_enum)) {
 	CD_FLAG_NEW_DISC	= 0x0002,
 	CD_FLAG_DISC_LOCKED	= 0x0004,
 	CD_FLAG_DISC_REMOVABLE	= 0x0008,

@@ -56,7 +56,7 @@ typedef enum {
 	PT_STATE_NORMAL
 } pt_state;
 
-typedef enum {
+typedef enum __attribute__((flag_enum)) {
 	PT_FLAG_NONE		= 0x00,
 	PT_FLAG_OPEN		= 0x01,
 	PT_FLAG_DEVICE_INVALID	= 0x02,

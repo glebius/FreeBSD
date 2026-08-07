@@ -58,7 +58,7 @@ typedef enum {
 	TARGBH_STATE_TEARDOWN
 } targbh_state;
 
-typedef enum {
+typedef enum __attribute__((flag_enum)) {
 	TARGBH_FLAG_NONE	 = 0x00,
 	TARGBH_FLAG_LUN_ENABLED	 = 0x01
 } targbh_flags;

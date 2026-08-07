@@ -86,7 +86,7 @@ typedef enum {
  * in conjunction with ctl_cmd_flags.  See comment above ctl_cmd_flags
  * definition in ctl_private.h.
  */
-typedef enum {
+typedef enum __attribute__((flag_enum)) {
 	CTL_FLAG_NONE		= 0x00000000,	/* no flags */
 	CTL_FLAG_DATA_IN	= 0x00000001,	/* DATA IN */
 	CTL_FLAG_DATA_OUT	= 0x00000002,	/* DATA OUT */

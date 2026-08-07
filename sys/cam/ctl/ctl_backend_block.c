@@ -123,7 +123,7 @@
 
 SDT_PROVIDER_DEFINE(cbb);
 
-typedef enum {
+typedef enum __attribute__((flag_enum)) {
 	CTL_BE_BLOCK_LUN_UNCONFIGURED	= 0x01,
 	CTL_BE_BLOCK_LUN_WAITING	= 0x04,
 } ctl_be_block_lun_flags;

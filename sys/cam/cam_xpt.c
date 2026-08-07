@@ -130,14 +130,14 @@ struct xpt_softc {
 	struct taskqueue	*xpt_taskq;
 };
 
-typedef enum {
-	DM_RET_COPY		= 0x01,
-	DM_RET_FLAG_MASK	= 0x0f,
+typedef enum __attribute__((flag_enum)) {
 	DM_RET_NONE		= 0x00,
+	DM_RET_COPY		= 0x01,
+	DM_RET_FLAG_MASK	= DM_RET_COPY,
 	DM_RET_STOP		= 0x10,
 	DM_RET_DESCEND		= 0x20,
 	DM_RET_ERROR		= 0x30,
-	DM_RET_ACTION_MASK	= 0xf0
+	DM_RET_ACTION_MASK	= DM_RET_STOP | DM_RET_DESCEND | DM_RET_ERROR,
 } dev_match_ret;
 
 typedef enum {

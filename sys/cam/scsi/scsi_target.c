@@ -65,7 +65,7 @@ struct targ_cmd_descr {
 
 TAILQ_HEAD(descr_queue, targ_cmd_descr);
 
-typedef enum {
+typedef enum __attribute__((flag_enum)) {
 	TARG_STATE_RESV		= 0x00, /* Invalid state */
 	TARG_STATE_OPENED	= 0x01, /* Device opened, softc initialized */
 	TARG_STATE_LUN_ENABLED	= 0x02  /* Device enabled for a path */

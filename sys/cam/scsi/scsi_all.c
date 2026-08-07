@@ -3488,7 +3488,7 @@ scsi_error_action(struct ccb_scsiio *csio, struct scsi_inquiry_data *inq_data,
 	const struct asc_table_entry *asc_entry;
 	const struct sense_key_table_entry *sense_entry;
 	int error_code, sense_key, asc, ascq;
-	scsi_sense_action action;
+	int action;	/* XXX: scsi_sense_action */
 
 	if (!scsi_extract_sense_ccb((union ccb *)csio,
 	    &error_code, &sense_key, &asc, &ascq)) {
@@ -3543,8 +3543,7 @@ scsi_error_action(struct ccb_scsiio *csio, struct scsi_inquiry_data *inq_data,
 			 * the user to know that some recovery action
 			 * was required.
 			 */
-			action &= ~(SS_MASK|SSQ_MASK|SS_ERRMASK);
-			action |= SS_NOP|SSQ_PRINT_SENSE;
+			action = SS_NOP|SSQ_PRINT_SENSE;
 		} else if (sense_key == SSD_KEY_ILLEGAL_REQUEST) {
 			if ((sense_flags & SF_QUIET_IR) != 0)
 				action &= ~SSQ_PRINT_SENSE;

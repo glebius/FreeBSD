@@ -121,7 +121,7 @@ typedef enum {
 /* bits in ccb_pflags */
 #define	SA_POSITION_UPDATED	0x1
 
-typedef enum {
+typedef enum __attribute__((flag_enum)) {
 	SA_FLAG_OPEN		= 0x00001,
 	SA_FLAG_FIXED		= 0x00002,
 	SA_FLAG_TAPE_LOCKED	= 0x00004,
@@ -210,7 +210,7 @@ static struct sa_timeout_desc {
 	{"write_filemarks",	IO_TIMEOUT},
 };
 
-typedef enum {
+typedef enum __attribute__((flag_enum)) {
 	SA_PARAM_NONE		= 0x000,
 	SA_PARAM_BLOCKSIZE	= 0x001,
 	SA_PARAM_DENSITY	= 0x002,
@@ -224,7 +224,7 @@ typedef enum {
 	SA_PARAM_ALL		= 0x1ff
 } sa_params;
 
-typedef enum {
+typedef enum __attribute__((flag_enum)) {
 	SA_QUIRK_NONE		= 0x000,
 	SA_QUIRK_NOCOMP		= 0x001, /* Can't deal with compression at all*/
 	SA_QUIRK_FIXED		= 0x002, /* Force fixed mode */

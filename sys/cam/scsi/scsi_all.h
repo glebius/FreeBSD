@@ -57,10 +57,10 @@ extern int scsi_delay;
 
 /*
  * This type defines actions to be taken when a particular sense code is
- * received.  Right now, these flags are only defined to take up 16 bits,
- * but can be expanded in the future if necessary.
+ * received.  XXX: struct asc_table_entry mixes these flags with errno.h
+ * constants, thus low bit usage is not allowed here.
  */
-typedef enum {
+typedef enum __attribute__((flag_enum)) {
 	SS_NOP      = 0x000000,	/* Do nothing */
 	SS_RETRY    = 0x010000,	/* Retry the command */
 	SS_FAIL     = 0x020000,	/* Bail out */
@@ -72,11 +72,9 @@ typedef enum {
 	SS_TUR      = 0x040000,	/* Send a Test Unit Ready command to the
 				 * device, then retry the original command.
 				 */
-	SS_MASK     = 0xff0000
-} scsi_sense_action;
+	SS_MASK     = SS_RETRY | SS_FAIL | SS_START | SS_TUR,
 
-typedef enum {
-	SSQ_NONE		= 0x0000,
+	/* Qualifiers. */
 	SSQ_DECREMENT_COUNT	= 0x0100,  /* Decrement the retry count */
 	SSQ_MANY		= 0x0200,  /* send lots of recovery commands */
 	SSQ_RANGE		= 0x0400,  /*
@@ -89,8 +87,9 @@ typedef enum {
 	SSQ_UA			= 0x1000,  /* Broadcast UA. */
 	SSQ_RESCAN		= 0x2000,  /* Rescan target for LUNs. */
 	SSQ_LOST		= 0x4000,  /* Destroy the LUNs. */
-	SSQ_MASK		= 0xff00
-} scsi_sense_action_qualifier;
+	SSQ_MASK	= SSQ_DECREMENT_COUNT | SSQ_MANY | SSQ_RANGE |
+			  SSQ_PRINT_SENSE | SSQ_UA | SSQ_RESCAN | SSQ_LOST,
+} scsi_sense_action;
 
 /* Mask for error status values */
 #define	SS_ERRMASK	0xff
@@ -3797,7 +3796,7 @@ struct scsi_op_quirk_entry {
 	struct op_table_entry		*op_table;
 };
 
-typedef enum {
+typedef enum __attribute__((flag_enum)) {
 	SSS_FLAG_NONE		= 0x00,
 	SSS_FLAG_PRINT_COMMAND	= 0x01
 } scsi_sense_string_flags;
