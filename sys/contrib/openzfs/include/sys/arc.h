@@ -112,7 +112,7 @@ typedef enum arc_strategy {
 	ARC_STRATEGY_META_BALANCED	= 1, /* Evict data buffers if needed */
 } arc_strategy_t;
 
-typedef enum arc_flags
+typedef enum __attribute__((flag_enum)) arc_flags
 {
 	/*
 	 * Public flags that can be passed into the ARC by external consumers.
@@ -188,7 +188,7 @@ typedef enum arc_flags
 	ARC_FLAG_COMPRESS_6		= 1 << 30
 } arc_flags_t;
 
-typedef enum arc_buf_flags {
+typedef enum __attribute__((flag_enum)) arc_buf_flags {
 	ARC_BUF_FLAG_SHARED		= 1 << 0,
 	ARC_BUF_FLAG_COMPRESSED		= 1 << 1,
 	/*
