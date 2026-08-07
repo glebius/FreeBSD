@@ -83,7 +83,7 @@
 #define	CDG_VERSION "0.1"
 
 /* Private delay-gradient induced congestion control signal. */
-#define	CC_CDG_DELAY 0x01000000
+#define	CC_CDG_DELAY	CC_PRIVATE1
 
 /* NewReno window deflation factor on loss (as a percentage). */
 #define	RENO_BETA 50

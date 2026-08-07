@@ -130,6 +130,9 @@ typedef enum {
 	 * The highest order 8 bits (0x01000000 - 0x80000000) are reserved
 	 * for CC algos to declare their own congestion signal types.
 	 */
+	CC_PRIVATE1 = 0x01000000,
+	CC_PRIVATE2 = 0x02000000,
+	CC_PRIVATE3 = 0x04000000,
 	CC_SIGPRIVMASK = 0xFF000000	/* Mask to check if sig is private. */
 } ccsignal_t;
 

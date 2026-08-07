@@ -84,7 +84,7 @@
  * Private signal type for rate based congestion signal.
  * See <netinet/cc.h> for appropriate bit-range to use for private signals.
  */
-#define	CC_CHD_DELAY	0x02000000
+#define	CC_CHD_DELAY	CC_PRIVATE2
 
 /* Largest possible number returned by prng32(). */
 #define	RANDOM_MAX	UINT32_MAX

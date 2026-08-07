@@ -84,7 +84,7 @@
  * Private signal type for rate based congestion signal.
  * See <netinet/cc.h> for appropriate bit-range to use for private signals.
  */
-#define	CC_VEGAS_RATE	0x04000000
+#define	CC_VEGAS_RATE	CC_PRIVATE3
 
 static void	vegas_ack_received(struct cc_var *ccv, ccsignal_t ack_type);
 static void	vegas_cb_destroy(struct cc_var *ccv);
