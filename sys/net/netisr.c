@@ -467,11 +467,6 @@ netisr_register(const struct netisr_handler *nhp)
 	    ("%s: nh_name NULL for %u", __func__, proto));
 	KASSERT(nhp->nh_handler != NULL,
 	    ("%s: nh_handler NULL for %s", __func__, name));
-	KASSERT(nhp->nh_policy == NETISR_POLICY_SOURCE ||
-	    nhp->nh_policy == NETISR_POLICY_FLOW ||
-	    nhp->nh_policy == NETISR_POLICY_CPU,
-	    ("%s: unsupported nh_policy %u for %s", __func__,
-	    nhp->nh_policy, name));
 	KASSERT(nhp->nh_policy == NETISR_POLICY_FLOW ||
 	    nhp->nh_m2flow == NULL,
 	    ("%s: nh_policy != FLOW but m2flow defined for %s", __func__,
@@ -482,11 +477,6 @@ netisr_register(const struct netisr_handler *nhp)
 	KASSERT(nhp->nh_policy != NETISR_POLICY_CPU || nhp->nh_m2cpuid != NULL,
 	    ("%s: nh_policy == CPU but m2cpuid not defined for %s", __func__,
 	    name));
-	KASSERT(nhp->nh_dispatch == NETISR_DISPATCH_DEFAULT ||
-	    nhp->nh_dispatch == NETISR_DISPATCH_DEFERRED ||
-	    nhp->nh_dispatch == NETISR_DISPATCH_HYBRID ||
-	    nhp->nh_dispatch == NETISR_DISPATCH_DIRECT,
-	    ("%s: invalid nh_dispatch (%u)", __func__, nhp->nh_dispatch));
 
 	KASSERT(proto < NETISR_MAXPROT,
 	    ("%s(%u, %s): protocol too big", __func__, proto, name));

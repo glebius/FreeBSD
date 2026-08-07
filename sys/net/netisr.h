@@ -62,18 +62,22 @@
  * Protocol ordering and affinity policy constants.  See the detailed
  * discussion of policies later in the file.
  */
-#define	NETISR_POLICY_SOURCE	1	/* Maintain source ordering. */
-#define	NETISR_POLICY_FLOW	2	/* Maintain flow ordering. */
-#define	NETISR_POLICY_CPU	3	/* Protocol determines CPU placement. */
+typedef enum {
+	NETISR_POLICY_SOURCE = 1,	/* Maintain source ordering. */
+	NETISR_POLICY_FLOW,		/* Maintain flow ordering. */
+	NETISR_POLICY_CPU,		/* Protocol determines CPU placement. */
+} netisr_policy_t;
 
 /*
  * Protocol dispatch policy constants; selects whether and when direct
  * dispatch is permitted.
  */
-#define	NETISR_DISPATCH_DEFAULT		0	/* Use global default. */
-#define	NETISR_DISPATCH_DEFERRED	1	/* Always defer dispatch. */
-#define	NETISR_DISPATCH_HYBRID		2	/* Allow hybrid dispatch. */
-#define	NETISR_DISPATCH_DIRECT		3	/* Always direct dispatch. */
+typedef enum {
+	NETISR_DISPATCH_DEFAULT	= 0,		/* Use global default. */
+	NETISR_DISPATCH_DEFERRED,		/* Always defer dispatch. */
+	NETISR_DISPATCH_HYBRID,			/* Allow hybrid dispatch. */
+	NETISR_DISPATCH_DIRECT,			/* Always direct dispatch. */
+} netisr_dispatch_t;
 
 /*
  * Monitoring data structures, exported by sysctl(2).
@@ -87,9 +91,9 @@ struct sysctl_netisr_proto {
 	char	snp_name[NETISR_NAMEMAXLEN];	/* nh_name */
 	u_int	snp_proto;			/* nh_proto */
 	u_int	snp_qlimit;			/* nh_qlimit */
-	u_int	snp_policy;			/* nh_policy */
+	netisr_policy_t snp_policy;		/* nh_policy */
 	u_int	snp_flags;			/* Various flags. */
-	u_int	snp_dispatch;			/* Dispatch policy. */
+	netisr_dispatch_t snp_dispatch;		/* Dispatch policy. */
 	u_int	_snp_ispare[6];
 };
 
@@ -192,8 +196,8 @@ struct netisr_handler {
 	netisr_drainedcpu_t *nh_drainedcpu; /* Callback when drained a queue. */
 	u_int		 nh_proto;	/* Integer protocol ID. */
 	u_int		 nh_qlimit;	/* Maximum per-CPU queue depth. */
-	u_int		 nh_policy;	/* Work placement policy. */
-	u_int		 nh_dispatch;	/* Dispatch policy. */
+	netisr_policy_t	 nh_policy;	/* Work placement policy. */
+	netisr_dispatch_t nh_dispatch;	/* Dispatch policy. */
 	u_int		 nh_ispare[4];	/* For future use. */
 	void		*nh_pspare[4];	/* For future use. */
 };
