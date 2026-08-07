@@ -312,8 +312,13 @@ enum pmc_caps
  * PMC Event Numbers
  *
  * These are generated from the definitions in "dev/hwpmc/pmc_events.h".
+ * XXX: current enum pmc_event usage doesn't allow -Werror=assign-enum, thus
+ * any compilation unit that includes this file has it disabled.  ATM, this
+ * includes the hwpmc mod itself and kern_clock.c, kern_mutex.c and MD trap.c.
  */
-
+#ifdef __clang__
+#pragma clang diagnostic ignored "-Wassign-enum"
+#endif
 enum pmc_event {
 #undef	__PMC_EV
 #undef	__PMC_EV_BLOCK
