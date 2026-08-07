@@ -84,7 +84,6 @@ pmc_intel_initialize(void)
 
 	PMCDBG1(MDP,INI,0, "intel-initialize cpuid=0x%x", cpu_id);
 
-	cputype = -1;
 	nclasses = 2;
 	error = 0;
 	verov = 0;
@@ -270,12 +269,12 @@ pmc_intel_initialize(void)
 			cputype = PMC_CPU_INTEL_SAPPHIRE_RAPIDS;
 			nclasses = 3;
 			break;
+		default:
+			goto unknown;
 		}
 		break;
-	}
-
-
-	if ((int) cputype == -1) {
+	default:
+unknown:
 		printf("pmc: Unknown Intel CPU.\n");
 		return (NULL);
 	}
