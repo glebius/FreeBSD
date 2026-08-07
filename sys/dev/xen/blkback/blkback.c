@@ -371,8 +371,7 @@ struct xbb_ring_config {
 /**
  * Per-instance connection state flags.
  */
-typedef enum
-{
+typedef enum __attribute__((flag_enum)) {
 	/**
 	 * The front-end requested a read-only mount of the
 	 * back-end device/file.

@@ -46,7 +46,7 @@
  * Enumeration of state flag values for the xbs_flags field of
  * the xenbusb_softc structure.
  */
-typedef enum {
+typedef enum __attribute__((flag_enum)) {
 	/** */
 	XBS_ATTACH_CH_ACTIVE = 0x01
 } xenbusb_softc_flag;
@@ -109,7 +109,7 @@ struct xenbusb_softc {
  * Enumeration of state flag values for the xbs_flags field of
  * the xenbusb_softc structure.
  */
-typedef enum {
+typedef enum __attribute__((flag_enum)) {
 	/**
 	 * This device is contributing to the xbs_connecting_children
 	 * count of its parent bus.

@@ -353,8 +353,7 @@ struct xnb_ring_config {
 /**
  * Per-instance connection state flags.
  */
-typedef enum
-{
+typedef enum __attribute__((flag_enum)) {
 	/** Communication with the front-end has been established. */
 	XNBF_RING_CONNECTED    = 0x01,
 

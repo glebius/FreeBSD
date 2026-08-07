@@ -93,15 +93,16 @@
 #define XBD_INDIRECT_SEGS_TO_PAGES(segs)				\
 	((segs + XBD_MAX_SEGMENTS_PER_PAGE - 1) / XBD_MAX_SEGMENTS_PER_PAGE)
 
-typedef enum {
-	XBDCF_Q_MASK		= 0xFF,
+typedef enum __attribute__((flag_enum)) {
 	/* This command has contributed to xbd_qfrozen_cnt. */
 	XBDCF_FROZEN		= 1<<8,
 	/* Freeze the command queue on dispatch (i.e. single step command). */
 	XBDCF_Q_FREEZE		= 1<<9,
 	/* Bus DMA returned EINPROGRESS for this command. */
 	XBDCF_ASYNC_MAPPING	= 1<<10,
-	XBDCF_INITIALIZER	= XBDCF_Q_MASK
+	XBDCF_Q_MASK		= XBDCF_FROZEN | XBDCF_Q_FREEZE |
+				  XBDCF_ASYNC_MAPPING,
+	XBDCF_INITIALIZER	= XBDCF_Q_MASK,
 } xbdc_flag_t;
 
 struct xbd_command;
@@ -149,7 +150,7 @@ typedef enum {
 	XBD_STATE_SUSPENDED
 } xbd_state_t;
 
-typedef enum {
+typedef enum __attribute__((flag_enum)) {
 	XBDF_NONE	  = 0,
 	XBDF_OPEN	  = 1 << 0, /* drive is open (can't shut down) */
 	XBDF_BARRIER	  = 1 << 1, /* backend supports barriers */
