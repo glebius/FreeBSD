@@ -252,7 +252,6 @@ pmc_soft_ev_register(struct pmc_soft *ps)
 	int n;
 
 	ps->ps_running  = 0;
-	ps->ps_ev.pm_ev_code = 0; /* invalid */
 	pmc_soft_namecleanup(ps->ps_ev.pm_ev_name);
 
 	mtx_lock_spin(&pmc_softs_mtx);
