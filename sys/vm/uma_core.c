@@ -268,7 +268,7 @@ struct uma_bucket_zone bucket_zones[] = {
 /*
  * Flags and enumerations to be passed to internal functions.
  */
-enum zfreeskip {
+enum __attribute__((flag_enum)) zfreeskip {
 	SKIP_NONE =	0,
 	SKIP_CNT =	0x00000001,
 	SKIP_DTOR =	0x00010000,
