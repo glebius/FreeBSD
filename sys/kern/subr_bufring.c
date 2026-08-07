@@ -50,6 +50,7 @@ buf_ring_alloc(int count, struct malloc_type *type, int flags, lock_object_t lo)
 		return (NULL);
 	}
 	br->br_lock = lo.lo;
+	br->br_malloc_type = type;
 	br->br_prod_size = br->br_cons_size = count;
 	br->br_prod_mask = br->br_cons_mask = count-1;
 	br->br_prod_head = br->br_cons_head = 0;
@@ -63,4 +64,25 @@ buf_ring_free(struct buf_ring *br, struct malloc_type *type)
 {
 	counter_u64_free(br->br_drops);
 	free(br, type);
+}
+
+static void
+buf_ring_free_delayed(epoch_context_t ctx)
+{
+	struct buf_ring *br = __containerof(ctx, struct buf_ring, br_epoch_ctx);
+	void *ele;
+
+	LOCK_CLASS(br->br_lock)->lc_lock(br->br_lock, 0);
+	while ((ele = buf_ring_dequeue_sc(br)))
+		br->br_epoch_free(ele);
+	LOCK_CLASS(br->br_lock)->lc_unlock(br->br_lock);
+	counter_u64_free(br->br_drops);
+	free(br, br->br_malloc_type);
+}
+
+void
+buf_ring_free_epoch(struct buf_ring *br, epoch_t epoch, br_epoch_free_t freefn)
+{
+	br->br_epoch_free = freefn;
+	epoch_call(epoch, buf_ring_free_delayed, &br->br_epoch_ctx);
 }

@@ -46,6 +46,8 @@
 .Fn buf_ring_alloc "int count" "struct malloc_type *type" "int flags" "lock_object_t lock"
 .Ft void
 .Fn buf_ring_free "struct buf_ring *br" "struct malloc_type *type"
+.Ft void
+.Fn buf_ring_free_epoch "struct buf_ring *br" "epoch_t epoch" "br_epoch_free_t freefn"
 .Ft int
 .Fn buf_ring_enqueue "struct buf_ring *br" "void *buf"
 .Ft void *
@@ -87,6 +89,16 @@ The
 .Fn buf_ring_free
 function is used to free a buf_ring.
 The user is responsible for freeing any enqueued items.
+.Pp
+The
+.Fn buf_ring_free_epoch
+allows to free a buf_ring in a delayed context associated with
+.Fa epoch .
+It will drain the ring buffer using
+.Fa freefn
+function to free the elements.
+It will use the same malloc_type to free the buf_ring itself that was used
+when the ring was allocated.
 .Pp
 The
 .Fn buf_ring_enqueue
