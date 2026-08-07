@@ -144,6 +144,7 @@ typedef int32_t (*ocs_scsi_rsp_io_cb_t)(ocs_io_t *io, ocs_scsi_io_status_e statu
 
 /* ocs_scsi_recv_tmf() request values */
 typedef enum {
+	OCS_SCSI_TMF_NONE = 0,
 	OCS_SCSI_TMF_ABORT_TASK = 1,
 	OCS_SCSI_TMF_QUERY_TASK_SET,
 	OCS_SCSI_TMF_ABORT_TASK_SET,

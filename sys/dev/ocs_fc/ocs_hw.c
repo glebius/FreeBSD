@@ -12404,9 +12404,6 @@ ocs_hw_set_persistent_topology(ocs_hw_t *hw, uint32_t topology, uint32_t opts)
 #define HW_FWREV_ZERO		(0ull)
 #define HW_FWREV_MAX		(~0ull)
 
-#define SLI4_ASIC_TYPE_ANY	0
-#define SLI4_ASIC_REV_ANY	0
-
 /**
  * @brief Internal definition of workarounds
  */

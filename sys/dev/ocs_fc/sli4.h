@@ -3195,6 +3195,7 @@ typedef enum {
 } sli4_port_type_e;
 
 typedef enum {
+	SLI4_ASIC_TYPE_ANY = 0,
 	SLI4_ASIC_TYPE_BE3 = 1,
 	SLI4_ASIC_TYPE_SKYHAWK,
 	SLI4_ASIC_TYPE_LANCER,
@@ -3204,6 +3205,7 @@ typedef enum {
 } sli4_asic_type_e;
 
 typedef enum {
+	SLI4_ASIC_REV_ANY = 0,
 	SLI4_ASIC_REV_FPGA = 1,
 	SLI4_ASIC_REV_A0,
 	SLI4_ASIC_REV_A1,
