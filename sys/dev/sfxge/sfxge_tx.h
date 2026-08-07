@@ -75,7 +75,7 @@
  * chain.  Set only the TX_BUF_UNMAP flag on a descriptor referring to
  * a heap buffer.
  */
-enum sfxge_tx_buf_flags {
+enum __attribute__((flag_enum)) sfxge_tx_buf_flags {
 	TX_BUF_UNMAP = 1,
 	TX_BUF_MBUF = 2,
 };
