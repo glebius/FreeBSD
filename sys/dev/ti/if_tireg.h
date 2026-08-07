@@ -1008,7 +1008,7 @@ struct ti_type {
 #define TI_TIMEOUT		1000
 #define TI_TXCONS_UNSET		0xFFFF	/* impossible value */
 
-typedef enum {
+typedef enum __attribute__((flag_enum)) {
 	TI_FLAG_NONE		= 0x00,
 	TI_FLAG_DEBUGING	= 0x01,
 	TI_FLAG_WAIT_FOR_LINK	= 0x02
