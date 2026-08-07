@@ -85,6 +85,9 @@ CFLAGS.gcc+= --param large-function-growth=${CFLAGS_PARAM_LARGE_FUNCTION_GROWTH}
 CFLAGS.gcc+=${CFLAGS_ARCH_PARAMS}
 .endif
 WERROR?=	-Werror
+.if ${COMPILER_TYPE} == "clang"
+WERROR+=	-Werror=assign-enum
+.endif
 # The following should be removed no earlier than LLVM11 being imported into the
 # tree, to ensure we don't regress the build.  LLVM11 and GCC10 will switch the
 # default over to -fno-common, making this redundant.
