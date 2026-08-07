@@ -19,7 +19,7 @@
 #ifndef _ATH_AR5416_CAL_H_
 #define _ATH_AR5416_CAL_H_
 
-typedef enum {
+typedef enum __attribute__((flag_enum)) {
 	ADC_DC_INIT_CAL	= 0x1,
 	ADC_GAIN_CAL	= 0x2,
 	ADC_DC_CAL	= 0x4,

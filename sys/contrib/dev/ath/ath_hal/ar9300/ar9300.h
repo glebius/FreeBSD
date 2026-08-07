@@ -578,7 +578,7 @@ struct ath_hal_9300 {
     void        *ah_cal_mem;
     HAL_BOOL    ah_emu_eeprom;
 
-    HAL_ANI_CMD ah_ani_function;
+    int ah_ani_function;	/* XXX: HAL_ANI_CMD */
     HAL_BOOL    ah_rifs_enabled;
     u_int32_t   ah_rifs_reg[11];
     u_int32_t   ah_rifs_sec_cnt;

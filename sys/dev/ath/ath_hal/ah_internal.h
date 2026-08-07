@@ -763,7 +763,7 @@ typedef struct {
 	uint32_t dma_dbg_6;
 } mac_dbg_regs_t;
 
-typedef enum {
+typedef enum __attribute__((flag_enum)) {
 	dcu_chain_state		= 0x1,
 	dcu_complete_state	= 0x2,
 	qcu_state		= 0x4,
@@ -806,7 +806,7 @@ enum {
 };
 
 /* Merge these with above */
-typedef enum hal_hw_hangs {
+typedef enum __attribute__((flag_enum)) hal_hw_hangs {
     HAL_DFS_BB_HANG_WAR          = 0x1,
     HAL_RIFS_BB_HANG_WAR         = 0x2,
     HAL_RX_STUCK_LOW_BB_HANG_WAR = 0x4,

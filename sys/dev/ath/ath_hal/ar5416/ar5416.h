@@ -119,7 +119,7 @@ struct ath_hal_5416 {
 	uint32_t	ah_rx_chainmask;
 	uint32_t	ah_tx_chainmask;
 
-	HAL_ANI_CMD	ah_ani_function;
+	int ah_ani_function;	/* XXX: HAL_ANI_CMD */
 
 	struct ar5416PerCal ah_cal;		/* periodic calibration state */
 

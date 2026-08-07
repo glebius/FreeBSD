@@ -279,7 +279,7 @@ typedef enum {
  * Transmit queue flags that control various
  * operational parameters.
  */
-typedef enum {
+typedef enum __attribute__((flag_enum)) {
 	/*
 	 * Per queue interrupt enables.  When set the associated
 	 * interrupt may be delivered for packets sent through
@@ -467,7 +467,7 @@ typedef enum {
  * as the HAL functions using it, must be modified. All values are directly
  * mapped unless commented otherwise.
  */
-typedef enum {
+typedef enum __attribute__((flag_enum)) {
 	HAL_INT_RX	= 0x00000001,	/* Non-common mapping */
 	HAL_INT_RXDESC	= 0x00000002,	/* Legacy mapping */
 	HAL_INT_RXERR	= 0x00000004,
@@ -501,7 +501,7 @@ typedef enum {
 	HAL_INT_CST	= 0x10000000,	/* Non-common mapping */
 	HAL_INT_GTT	= 0x20000000,	/* Non-common mapping */
 	HAL_INT_FATAL	= 0x40000000,	/* Non-common mapping */
-#define	HAL_INT_GLOBAL	0x80000000	/* Set/clear IER */
+	HAL_INT_GLOBAL	= 0x80000000,	/* Set/clear IER */
 	HAL_INT_BMISC	= HAL_INT_TIM
 			| HAL_INT_DTIM
 			| HAL_INT_DTIMSYNC
@@ -737,7 +737,7 @@ typedef enum {
 	HAL_HT_EXTPROTSPACING_25 = 1,	/* 25 MHz spacing */
 } HAL_HT_EXTPROTSPACING;
 
-typedef enum {
+typedef enum __attribute__((flag_enum)) {
 	HAL_RX_CLEAR_CTL_LOW	= 0x1,	/* force control channel to appear busy */
 	HAL_RX_CLEAR_EXT_LOW	= 0x2,	/* force extension channel to appear busy */
 } HAL_HT_RXCLEAR;
@@ -976,9 +976,8 @@ typedef enum {
 	HAL_ANI_PHYERR_RESET = 7,		/* reset phy error stats */
 	HAL_ANI_MRC_CCK = 8,
 	HAL_ANI_CCK_NOISE_IMMUNITY_LEVEL = 9,	/* set level (cck) */
+	HAL_ANI_ALL = 0xffffffff
 } HAL_ANI_CMD;
-
-#define	HAL_ANI_ALL		0xffffffff
 
 /*
  * This is the layout of the ANI INTMIT capability.
@@ -1085,7 +1084,7 @@ typedef struct {
 /*
  * Flag for setting QUIET period
  */
-typedef enum {
+typedef enum __attribute__((flag_enum)) {
 	HAL_QUIET_DISABLE		= 0x0,
 	HAL_QUIET_ENABLE		= 0x1,
 	HAL_QUIET_ADD_CURRENT_TSF	= 0x2,	/* add current TSF to next_start offset */
