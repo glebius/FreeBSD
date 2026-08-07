@@ -129,7 +129,7 @@ enum ieee80211_rate_flags {
 	IEEE80211_RATE_MANDATORY_B		= BIT(6),
 };
 
-enum ieee80211_rate_control_changed_flags {
+enum __attribute__((flag_enum)) ieee80211_rate_control_changed_flags {
 	IEEE80211_RC_BW_CHANGED			= BIT(0),
 	IEEE80211_RC_NSS_CHANGED		= BIT(1),
 	IEEE80211_RC_SUPP_RATES_CHANGED		= BIT(2),

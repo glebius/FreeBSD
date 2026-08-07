@@ -157,7 +157,7 @@ struct lkpi_radiotap_rx_hdr {
 
 struct lkpi_hw;
 
-enum lkpi_txq_flags {
+enum __attribute__((flag_enum)) lkpi_txq_flags {
 	LKPI_TXQ_SEEN_DEQUEUE			= 0x01,
 	LKPI_TXQ_STOPPED			= 0x02,
 	LKPI_TXQ_STOPPED_BA			= 0x04,

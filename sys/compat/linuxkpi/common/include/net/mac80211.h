@@ -56,7 +56,7 @@
 #define	IEEE80211_LINK_UNSPECIFIED		0x0f
 
 /* hw->conf.flags */
-enum ieee80211_hw_conf_flags {
+enum __attribute__((flag_enum)) ieee80211_hw_conf_flags {
 	IEEE80211_CONF_IDLE			= BIT(0),
 	IEEE80211_CONF_PS			= BIT(1),
 	IEEE80211_CONF_MONITOR			= BIT(2),
@@ -92,7 +92,7 @@ enum mcast_filter_flags {
 	FIF_FLAGS_MASK			= BIT(8)-1,
 };
 
-enum ieee80211_bss_changed {
+enum __attribute__((flag_enum)) ieee80211_bss_changed {
 	BSS_CHANGED_ARP_FILTER		= BIT(0),
 	BSS_CHANGED_ASSOC		= BIT(1),
 	BSS_CHANGED_BANDWIDTH		= BIT(2),
