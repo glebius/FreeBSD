@@ -284,7 +284,7 @@ void mpt2host_mpi_raid_vol_indicator(MPI_RAID_VOL_INDICATOR *);
 #endif
 
 /**************************** MPI Transaction State ***************************/
-typedef enum {
+typedef enum __attribute__((flag_enum)) {
 	REQ_STATE_NIL		= 0x00,
 	REQ_STATE_FREE		= 0x01,
 	REQ_STATE_ALLOCATED	= 0x02,
@@ -293,7 +293,6 @@ typedef enum {
 	REQ_STATE_TIMEDOUT	= 0x10,
 	REQ_STATE_NEED_WAKEUP	= 0x20,
 	REQ_STATE_LOCKED	= 0x80,	/* can't be freed */
-	REQ_STATE_MASK		= 0xFF
 } mpt_req_state_t; 
 
 struct req_entry {
@@ -455,7 +454,7 @@ struct mpt_pci_cfg {
 	uint32_t PMCSR;
 };
 
-typedef enum {
+typedef enum __attribute__((flag_enum)) {
 	MPT_RVF_NONE		= 0x0,
 	MPT_RVF_ACTIVE		= 0x1,
 	MPT_RVF_ANNOUNCED	= 0x2,
@@ -471,7 +470,7 @@ struct mpt_raid_volume {
 	u_int				quiesced_disks;
 };
 
-typedef enum {
+typedef enum __attribute__((flag_enum)) {
 	MPT_RDF_NONE		= 0x00,
 	MPT_RDF_ACTIVE		= 0x01,
 	MPT_RDF_ANNOUNCED	= 0x02,
