@@ -3856,13 +3856,7 @@ static moduledata_t ipfwmod = {
 	0
 };
 
-/* Define startup order. */
-#define	IPFW_SI_SUB_FIREWALL	SI_SUB_PROTO_FIREWALL
-#define	IPFW_MODEVENT_ORDER	(SI_ORDER_ANY - 255) /* On boot slot in here. */
-#define	IPFW_MODULE_ORDER	(IPFW_MODEVENT_ORDER + 1) /* A little later. */
-#define	IPFW_VNET_ORDER		(IPFW_MODEVENT_ORDER + 2) /* Later still. */
-
-DECLARE_MODULE(ipfw, ipfwmod, IPFW_SI_SUB_FIREWALL, IPFW_MODEVENT_ORDER);
+DECLARE_MODULE(ipfw, ipfwmod, SI_SUB_PROTO_FIREWALL, SI_ORDER_FIRST);
 FEATURE(ipfw_ctl3, "ipfw new sockopt calls");
 MODULE_VERSION(ipfw, 3);
 /* should declare some dependencies here */
@@ -3871,10 +3865,9 @@ MODULE_VERSION(ipfw, 3);
  * Starting up. Done in order after ipfwmod() has been called.
  * VNET_SYSINIT is also called for each existing vnet and each new vnet.
  */
-SYSINIT(ipfw_init, IPFW_SI_SUB_FIREWALL, IPFW_MODULE_ORDER,
-	    ipfw_init, NULL);
-VNET_SYSINIT(vnet_ipfw_init, IPFW_SI_SUB_FIREWALL, IPFW_VNET_ORDER,
-	    vnet_ipfw_init, NULL);
+SYSINIT(ipfw_init, SI_SUB_PROTO_FIREWALL, SI_ORDER_SECOND, ipfw_init, NULL);
+VNET_SYSINIT(vnet_ipfw_init, SI_SUB_PROTO_FIREWALL, SI_ORDER_THIRD,
+    vnet_ipfw_init, NULL);
 
 /*
  * Closing up shop. These are done in REVERSE ORDER, but still
@@ -3882,8 +3875,8 @@ VNET_SYSINIT(vnet_ipfw_init, IPFW_SI_SUB_FIREWALL, IPFW_VNET_ORDER,
  * VNET_SYSUNINIT is also called for each exiting vnet as it exits.
  * or when the module is unloaded.
  */
-SYSUNINIT(ipfw_destroy, IPFW_SI_SUB_FIREWALL, IPFW_MODULE_ORDER,
-	    ipfw_destroy, NULL);
-VNET_SYSUNINIT(vnet_ipfw_uninit, IPFW_SI_SUB_FIREWALL, IPFW_VNET_ORDER,
-	    vnet_ipfw_uninit, NULL);
+SYSUNINIT(ipfw_destroy, SI_SUB_PROTO_FIREWALL, SI_ORDER_SECOND, ipfw_destroy,
+    NULL);
+VNET_SYSUNINIT(vnet_ipfw_uninit, SI_SUB_PROTO_FIREWALL, SI_ORDER_THIRD,
+    vnet_ipfw_uninit, NULL);
 /* end of file */
