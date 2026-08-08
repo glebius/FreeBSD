@@ -63,7 +63,6 @@
  * netisr.h.
  */
 
-#include "opt_ddb.h"
 #include "opt_device_polling.h"
 
 #include <sys/param.h>
@@ -83,10 +82,6 @@
 #include <sys/socket.h>
 #include <sys/sysctl.h>
 #include <sys/systm.h>
-
-#ifdef DDB
-#include <ddb/ddb.h>
-#endif
 
 #include <net/if.h>
 #include <net/if_var.h>
@@ -1550,38 +1545,3 @@ SYSCTL_PROC(_net_isr, OID_AUTO, work,
     CTLFLAG_RD|CTLTYPE_STRUCT|CTLFLAG_MPSAFE, 0, 0, sysctl_netisr_work,
     "S,sysctl_netisr_work",
     "Return list of per-workstream, per-protocol work in netisr");
-
-#ifdef DDB
-DB_SHOW_COMMAND(netisr, db_show_netisr)
-{
-	struct netisr_workstream *nwsp;
-	struct netisr_work *nwp;
-	int first, proto;
-	u_int cpuid;
-
-	db_printf("%3s %6s %5s %5s %5s %8s %8s %8s %8s\n", "CPU", "Proto",
-	    "Len", "WMark", "Max", "Disp", "HDisp", "Drop", "Queue");
-	CPU_FOREACH(cpuid) {
-		nwsp = DPCPU_ID_PTR(cpuid, nws);
-		if (nwsp->nws_intr_event == NULL)
-			continue;
-		first = 1;
-		for (proto = 0; proto < NETISR_MAXPROT; proto++) {
-			if (netisr_proto[proto].np_handler == NULL)
-				continue;
-			nwp = &nwsp->nws_work[proto];
-			if (first) {
-				db_printf("%3d ", cpuid);
-				first = 0;
-			} else
-				db_printf("%3s ", "");
-			db_printf(
-			    "%6s %5d %5d %5d %8ju %8ju %8ju %8ju\n",
-			    netisr_proto[proto].np_name, nwp->nw_len,
-			    nwp->nw_watermark, nwp->nw_qlimit,
-			    nwp->nw_dispatched, nwp->nw_hybrid_dispatched,
-			    nwp->nw_qdrops, nwp->nw_queued);
-		}
-	}
-}
-#endif
