@@ -1344,8 +1344,10 @@ callout_init(struct callout *c, int mpsafe)
 }
 
 void
-_callout_init_lock(struct callout *c, struct lock_object *lock, int flags)
+callout_init_lock(struct callout *c, lock_object_t lo, int flags)
 {
+	struct lock_object *lock = lo.lo;
+
 	KASSERT(lock != NULL, ("%s: no lock", __func__));
 	KASSERT((flags & ~(CALLOUT_RETURNUNLOCKED | CALLOUT_SHAREDLOCK |
 	    CALLOUT_TRYLOCK)) == 0,
