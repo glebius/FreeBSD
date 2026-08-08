@@ -126,7 +126,11 @@ struct netisr_workstream {
 	void		*nws_swi_cookie;	/* swi(9) cookie for stream. */
 	struct mtx	 nws_mtx;		/* Synchronize work. */
 	u_int		 nws_cpu;		/* CPU pinning. */
-	u_int		 nws_flags;		/* Wakeup flags. */
+	enum __attribute__((flag_enum)) {
+		NWS_RUNNING	= 0x00000001,	/* running in a thread */
+		NWS_DISPATCHING	= 0x00000002,	/* being direct-dispatched */
+		NWS_SCHEDULED	= 0x00000004,	/* Signal issued. */
+	} nws_flags;
 	u_int		 nws_pendingbits;	/* Scheduled protocols. */
 
 	/*
@@ -154,13 +158,6 @@ struct netisr_workstream {
 		uint64_t nw_handled;	/* "" handled in worker. */
 	} nws_work[NETISR_MAXPROT];
 } __aligned(CACHE_LINE_SIZE);
-
-/*
- * Per-workstream flags.
- */
-#define	NWS_RUNNING	0x00000001	/* Currently running in a thread. */
-#define	NWS_DISPATCHING	0x00000002	/* Currently being direct-dispatched. */
-#define	NWS_SCHEDULED	0x00000004	/* Signal issued. */
 
 /*-
  * Synchronize use and modification of the registered netisr data structures;
