@@ -723,10 +723,6 @@ vnet_ether_init(const __unused void *arg)
 	args.pa_type = PFIL_TYPE_ETHERNET;
 	args.pa_headname = PFIL_ETHER_NAME;
 	V_link_pfil_head = pfil_head_register(&args);
-
-#ifdef VIMAGE
-	netisr_register_vnet(&ether_nh);
-#endif
 }
 VNET_SYSINIT(vnet_ether_init, SI_SUB_PROTO_IF, SI_ORDER_ANY,
     vnet_ether_init, NULL);
@@ -740,15 +736,6 @@ vnet_ether_pfil_destroy(const __unused void *arg)
 }
 VNET_SYSUNINIT(vnet_ether_pfil_uninit, SI_SUB_PROTO_PFIL, SI_ORDER_ANY,
     vnet_ether_pfil_destroy, NULL);
-
-static void
-vnet_ether_destroy(__unused void *arg)
-{
-
-	netisr_unregister_vnet(&ether_nh);
-}
-VNET_SYSUNINIT(vnet_ether_uninit, SI_SUB_PROTO_IF, SI_ORDER_ANY,
-    vnet_ether_destroy, NULL);
 #endif
 
 static void

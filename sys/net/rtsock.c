@@ -245,35 +245,6 @@ SYSCTL_PROC(_net_route, OID_AUTO, netisr_maxqlen,
     "maximum routing socket dispatch queue length");
 
 static void
-vnet_rts_init(void)
-{
-	int tmp;
-
-	if (IS_DEFAULT_VNET(curvnet)) {
-		if (TUNABLE_INT_FETCH("net.route.netisr_maxqlen", &tmp))
-			rtsock_nh.nh_qlimit = tmp;
-		netisr_register(&rtsock_nh);
-	}
-#ifdef VIMAGE
-	 else
-		netisr_register_vnet(&rtsock_nh);
-#endif
-}
-VNET_SYSINIT(vnet_rtsock, SI_SUB_PROTO_DOMAIN, SI_ORDER_THIRD,
-    vnet_rts_init, NULL);
-
-#ifdef VIMAGE
-static void
-vnet_rts_uninit(void)
-{
-
-	netisr_unregister_vnet(&rtsock_nh);
-}
-VNET_SYSUNINIT(vnet_rts_uninit, SI_SUB_PROTO_DOMAIN, SI_ORDER_THIRD,
-    vnet_rts_uninit, NULL);
-#endif
-
-static void
 report_route_event(const struct rib_cmd_info *rc, void *_cbdata)
 {
 	uint32_t fibnum = (uint32_t)(uintptr_t)_cbdata;
@@ -309,8 +280,13 @@ rtsock_notify_event(uint32_t fibnum, const struct rib_cmd_info *rc)
 static void
 rtsock_init(void *dummy __unused)
 {
+	int tmp;
+
 	rtsbridge_orig_p = rtsock_callback_p;
 	rtsock_callback_p = &rtsbridge;
+	if (TUNABLE_INT_FETCH("net.route.netisr_maxqlen", &tmp))
+		rtsock_nh.nh_qlimit = tmp;
+	netisr_register(&rtsock_nh);
 }
 SYSINIT(rtsock_init, SI_SUB_PROTO_DOMAIN, SI_ORDER_THIRD, rtsock_init, NULL);
 

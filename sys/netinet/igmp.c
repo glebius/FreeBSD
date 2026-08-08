@@ -3641,29 +3641,6 @@ igmp_rec_type_to_str(const int type)
 }
 #endif
 
-#ifdef VIMAGE
-static void
-vnet_igmp_init(const void *unused __unused)
-{
-
-	netisr_register_vnet(&igmp_nh);
-}
-VNET_SYSINIT(vnet_igmp_init, SI_SUB_PROTO_MC, SI_ORDER_ANY,
-    vnet_igmp_init, NULL);
-
-static void
-vnet_igmp_uninit(const void *unused __unused)
-{
-
-	/* This can happen when we shutdown the entire network stack. */
-	CTR1(KTR_IGMPV3, "%s: tearing down", __func__);
-
-	netisr_unregister_vnet(&igmp_nh);
-}
-VNET_SYSUNINIT(vnet_igmp_uninit, SI_SUB_PROTO_MC, SI_ORDER_ANY,
-    vnet_igmp_uninit, NULL);
-#endif
-
 #ifdef DDB
 DB_SHOW_COMMAND(igi_list, db_show_igi_list)
 {

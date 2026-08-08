@@ -1496,33 +1496,10 @@ arp_iflladdr(void *arg __unused, struct ifnet *ifp)
 }
 
 static void
-vnet_arp_init(void)
+arp_init(void)
 {
-
-	if (IS_DEFAULT_VNET(curvnet)) {
-		netisr_register(&arp_nh);
-		iflladdr_tag = EVENTHANDLER_REGISTER(iflladdr_event,
-		    arp_iflladdr, NULL, EVENTHANDLER_PRI_ANY);
-	}
-#ifdef VIMAGE
-	else
-		netisr_register_vnet(&arp_nh);
-#endif
+	netisr_register(&arp_nh);
+	iflladdr_tag = EVENTHANDLER_REGISTER(iflladdr_event, arp_iflladdr,
+	    NULL, EVENTHANDLER_PRI_ANY);
 }
-VNET_SYSINIT(vnet_arp_init, SI_SUB_PROTO_DOMAIN, SI_ORDER_SECOND,
-    vnet_arp_init, NULL);
-
-#ifdef VIMAGE
-/*
- * We have to unregister ARP along with IP otherwise we risk doing INADDR_HASH
- * lookups after destroying the hash.  Ideally this would go on SI_ORDER_3.5.
- */
-static void
-vnet_arp_destroy(__unused void *arg)
-{
-
-	netisr_unregister_vnet(&arp_nh);
-}
-VNET_SYSUNINIT(vnet_arp_uninit, SI_SUB_PROTO_DOMAIN, SI_ORDER_THIRD,
-    vnet_arp_destroy, NULL);
-#endif
+SYSINIT(vnet_arp_init, SI_SUB_PROTO_DOMAIN, SI_ORDER_SECOND, arp_init, NULL);
