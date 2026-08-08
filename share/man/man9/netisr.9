@@ -25,7 +25,7 @@
 .\" OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH
 .\" DAMAGE.
 .\"
-.Dd April 12, 2023
+.Dd August 8, 2026
 .Dt NETISR 9
 .Os
 .Sh NAME
@@ -53,12 +53,6 @@
 .Fn netisr_getqlimit "const struct netisr_handler *nhp" "u_int *qlimitp"
 .Ft int
 .Fn netisr_setqlimit "const struct netisr_handler *nhp" "u_int qlimit"
-.Ft u_int
-.Fn netisr_default_flow2cpu "u_int flowid"
-.Ft u_int
-.Fn netisr_get_cpucount "void"
-.Ft u_int
-.Fn netisr_get_cpuid "u_int cpunumber"
 .Pp
 With optional virtual network stack support enabled via the following kernel
 compile option:
