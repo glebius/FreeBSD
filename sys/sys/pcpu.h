@@ -186,7 +186,7 @@ struct pcpu {
 	struct lock_list_entry *pc_spinlocks;
 	long		pc_cp_time[CPUSTATES];	/* statclock ticks */
 	struct _device	*pc_device;		/* CPU device handle */
-	void		*pc_netisr;		/* netisr SWI cookie */
+	void		*pc_unused2;		/* available */
 	int8_t		pc_vfs_freevnodes;	/* freevnodes counter */
 	char		pc_unused1[3];		/* unused pad */
 	int		pc_domain;		/* Memory domain. */
