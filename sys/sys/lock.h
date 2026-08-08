@@ -171,6 +171,20 @@ extern struct lock_class lock_class_lockmgr;
 
 extern struct lock_class *lock_classes[];
 
+/*
+ * Type for all locks that inherit from lock_object, to provide a transparent
+ * argument that can be passed to KPIs that are flexible on what kind of lock
+ * KPI user provides.
+ */
+typedef union {
+	struct lock_object *lo;
+	struct mtx *mtx;
+	struct mtx_padalign *mtxpad;
+	struct rwlock *rw;
+	struct rmlock *rm;
+	struct sx *sx;
+} lock_object_t __attribute__((__transparent_union__));
+
 struct lock_delay_config {
 	u_short base;
 	u_short max;
