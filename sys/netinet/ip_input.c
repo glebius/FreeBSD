@@ -344,13 +344,6 @@ ip_vnet_init(void *arg __unused)
 	    HHOOK_WAITOK | HHOOK_HEADISINVNET) != 0)
 		printf("%s: WARNING: unable to register output helper hook\n",
 		    __func__);
-
-#ifdef VIMAGE
-	netisr_register_vnet(&ip_nh);
-#ifdef	RSS
-	netisr_register_vnet(&ip_direct_nh);
-#endif
-#endif
 }
 VNET_SYSINIT(ip_vnet_init, SI_SUB_PROTO_DOMAIN, SI_ORDER_FOURTH,
     ip_vnet_init, NULL);
@@ -399,11 +392,6 @@ static void
 ip_destroy(void *unused __unused)
 {
 	int error;
-
-#ifdef	RSS
-	netisr_unregister_vnet(&ip_direct_nh);
-#endif
-	netisr_unregister_vnet(&ip_nh);
 
 	pfil_head_unregister(V_inet_pfil_head);
 	error = hhook_head_deregister(V_ipsec_hhh_in[HHOOK_IPSEC_INET]);

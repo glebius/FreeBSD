@@ -271,14 +271,6 @@ ip6_vnet_init(void *arg __unused)
 	    (V_ip6_temp_preferred_lifetime >> 2) +
 	    (V_ip6_temp_preferred_lifetime >> 3);
 	V_ip6_desync_factor = arc4random() % V_ip6_temp_max_desync_factor;
-
-	/* Skip global initialization stuff for non-default instances. */
-#ifdef VIMAGE
-	netisr_register_vnet(&ip6_nh);
-#ifdef RSS
-	netisr_register_vnet(&ip6_direct_nh);
-#endif
-#endif
 }
 VNET_SYSINIT(ip6_vnet_init, SI_SUB_PROTO_DOMAIN, SI_ORDER_FOURTH,
     ip6_vnet_init, NULL);
@@ -358,11 +350,6 @@ ip6_destroy(void *unused __unused)
 	struct ifaddr *ifa, *nifa;
 	struct ifnet *ifp;
 	int error;
-
-#ifdef RSS
-	netisr_unregister_vnet(&ip6_direct_nh);
-#endif
-	netisr_unregister_vnet(&ip6_nh);
 
 	pfil_head_unregister(V_inet6_pfil_head);
 	error = hhook_head_deregister(V_ipsec_hhh_in[HHOOK_IPSEC_INET6]);
