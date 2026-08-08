@@ -228,19 +228,6 @@ int	netisr_queue(u_int proto, struct mbuf *m);
 int	netisr_queue_src(u_int proto, uintptr_t source, struct mbuf *m);
 
 /*
- * Provide a default implementation of "map an ID to a CPU ID".
- */
-u_int	netisr_default_flow2cpu(u_int flowid);
-
-/*
- * Utility routines to return the number of CPUs participting in netisr, and
- * to return a mapping from a number to a CPU ID that can be used with the
- * scheduler.
- */
-u_int	netisr_get_cpucount(void);
-u_int	netisr_get_cpuid(u_int cpunumber);
-
-/*
  * Interfaces between DEVICE_POLLING and netisr.
  */
 void	netisr_sched_poll(void);

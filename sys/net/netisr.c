@@ -319,37 +319,6 @@ SYSCTL_UINT(_net_isr, OID_AUTO, numthreads, CTLFLAG_RD,
 #define	NWS_SIGNAL(s)		swi_sched((s)->nws_swi_cookie, 0)
 
 /*
- * Utility routines for protocols that implement their own mapping of flows
- * to CPUs.
- */
-u_int
-netisr_get_cpucount(void)
-{
-
-	return (nws_count);
-}
-
-u_int
-netisr_get_cpuid(u_int cpunumber)
-{
-
-	return (nws_array[cpunumber % nws_count]);
-}
-
-/*
- * The default implementation of flow -> CPU ID mapping.
- *
- * Non-static so that protocols can use it to map their own work to specific
- * CPUs in a manner consistent to netisr for affinity purposes.
- */
-u_int
-netisr_default_flow2cpu(u_int flowid)
-{
-
-	return (nws_array[flowid % nws_count]);
-}
-
-/*
  * Dispatch tunable and sysctl configuration.
  */
 struct netisr_dispatch_table_entry {
@@ -880,11 +849,11 @@ netisr_select_cpuid(struct netisr_proto *npp, u_int dispatch_policy,
 		 * policy.
 		 */
 		if (*cpuidp != NETISR_CPUID_NONE) {
-			*cpuidp = netisr_get_cpuid(*cpuidp);
+			*cpuidp = nws_array[*cpuidp % nws_count];
 			return (m);
 		}
 		if (dispatch_policy == NETISR_DISPATCH_HYBRID) {
-			*cpuidp = netisr_get_cpuid(curcpu);
+			*cpuidp = nws_array[curcpu % nws_count];
 			return (m);
 		}
 		policy = NETISR_POLICY_SOURCE;
@@ -898,8 +867,7 @@ netisr_select_cpuid(struct netisr_proto *npp, u_int dispatch_policy,
 				return (NULL);
 		}
 		if (M_HASHTYPE_GET(m) != M_HASHTYPE_NONE) {
-			*cpuidp =
-			    netisr_default_flow2cpu(m->m_pkthdr.flowid);
+			*cpuidp = nws_array[m->m_pkthdr.flowid % nws_count];
 			return (m);
 		}
 		policy = NETISR_POLICY_SOURCE;
