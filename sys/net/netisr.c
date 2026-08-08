@@ -143,16 +143,15 @@ struct netisr_workstream {
 		u_int		 nw_qlimit;
 		u_int		 nw_watermark;
 
-		/*
-		 * Statistics -- written unlocked, but mostly from curcpu.
-		 */
-		uint64_t nw_dispatched; /* Number of direct dispatches. */
-		uint64_t nw_hybrid_dispatched; /* "" hybrid dispatches. */
-		uint64_t nw_qdrops;	/* "" drops. */
-		uint64_t nw_queued;	/* "" enqueues. */
-		uint64_t nw_handled;	/* "" handled in worker. */
+		counter_u64_t nw_dispatched; /* Number of direct dispatches. */
+		counter_u64_t nw_hybrid_dispatched; /* "" hybrid dispatches. */
+		counter_u64_t nw_qdrops;	/* "" drops. */
+		counter_u64_t nw_queued;	/* "" enqueues. */
+		counter_u64_t nw_handled;	/* "" handled in worker. */
 	} nws_work[NETISR_MAXPROT];
 } __aligned(CACHE_LINE_SIZE);
+
+static MALLOC_DEFINE(M_NETISR, "netisr", "netisr(9) work streams");
 
 /*-
  * Synchronize use and modification of the registered netisr data structures;
@@ -289,16 +288,13 @@ VNET_DEFINE_STATIC(u_int,	netisr_enable[NETISR_MAXPROT]);
 #endif
 
 /*
- * Per-CPU workstream data.
+ * The array is populated up to net.isr.numthreads / nws_count.
+ * A workstream can be picked up with curcpu % nws_count and once number of
+ * workstreams reaches mp_ncpus, this basically means curcpu is used as
+ * index.  Note that without thread binding enabled, the workstreams don't
+ * really belong to CPUs.
  */
-DPCPU_DEFINE(struct netisr_workstream, nws);
-
-/*
- * Map contiguous values between 0 and nws_count into CPU IDs appropriate for
- * accessing workstreams.  This allows constructions of the form
- * DPCPU_ID_GET(nws_array[arbitraryvalue % nws_count], nws).
- */
-static u_int				 nws_array[MAXCPU];
+static struct netisr_workstream	*nws_array[MAXCPU];
 
 /*
  * Number of registered workstreams.  Will be at most the number of running
@@ -412,9 +408,8 @@ void
 netisr_register(const struct netisr_handler *nhp)
 {
 	VNET_ITERATOR_DECL(vnet_iter);
-	struct netisr_work *npwp;
 	const char *name;
-	u_int i, proto;
+	u_int proto;
 
 	proto = nhp->nh_proto;
 	name = nhp->nh_name;
@@ -467,10 +462,15 @@ netisr_register(const struct netisr_handler *nhp)
 		netisr_proto[proto].np_qlimit = nhp->nh_qlimit;
 	netisr_proto[proto].np_policy = nhp->nh_policy;
 	netisr_proto[proto].np_dispatch = nhp->nh_dispatch;
-	CPU_FOREACH(i) {
-		npwp = &(DPCPU_ID_PTR(i, nws))->nws_work[proto];
-		bzero(npwp, sizeof(*npwp));
-		npwp->nw_qlimit = netisr_proto[proto].np_qlimit;
+	for (u_int i = 0; i < nws_count; i++) {
+		struct netisr_work *nw = &nws_array[i]->nws_work[proto];
+
+		nw->nw_qlimit = netisr_proto[proto].np_qlimit;
+		nw->nw_dispatched = counter_u64_alloc(M_WAITOK);
+		nw->nw_hybrid_dispatched = counter_u64_alloc(M_WAITOK);
+		nw->nw_qdrops = counter_u64_alloc(M_WAITOK);
+		nw->nw_queued = counter_u64_alloc(M_WAITOK);
+		nw->nw_handled = counter_u64_alloc(M_WAITOK);
 	}
 
 #ifdef VIMAGE
@@ -494,28 +494,18 @@ netisr_register(const struct netisr_handler *nhp)
 void
 netisr_clearqdrops(const struct netisr_handler *nhp)
 {
-	struct netisr_work *npwp;
-#ifdef INVARIANTS
-	const char *name;
-#endif
-	u_int i, proto;
+	u_int proto = nhp->nh_proto;
 
-	proto = nhp->nh_proto;
-#ifdef INVARIANTS
-	name = nhp->nh_name;
-#endif
 	KASSERT(proto < NETISR_MAXPROT,
-	    ("%s(%u): protocol too big for %s", __func__, proto, name));
+	    ("%s(%u): protocol too big for %s", __func__, proto, nhp->nh_name));
 
 	NETISR_WLOCK();
 	KASSERT(netisr_proto[proto].np_handler != NULL,
 	    ("%s(%u): protocol not registered for %s", __func__, proto,
-	    name));
+	    nhp->nh_name));
 
-	CPU_FOREACH(i) {
-		npwp = &(DPCPU_ID_PTR(i, nws))->nws_work[proto];
-		npwp->nw_qdrops = 0;
-	}
+	for (u_int i = 0; i < nws_count; i++)
+		counter_u64_zero(nws_array[i]->nws_work[proto].nw_qdrops);
 	NETISR_WUNLOCK();
 }
 
@@ -523,32 +513,23 @@ netisr_clearqdrops(const struct netisr_handler *nhp)
  * Query current drop counters across all workstreams for a protocol.
  */
 void
-netisr_getqdrops(const struct netisr_handler *nhp, u_int64_t *qdropp)
+netisr_getqdrops(const struct netisr_handler *nhp, uint64_t *qdropp)
 {
-	struct netisr_work *npwp;
 	struct rm_priotracker tracker;
-#ifdef INVARIANTS
-	const char *name;
-#endif
-	u_int i, proto;
+	u_int proto = nhp->nh_proto;
 
-	*qdropp = 0;
-	proto = nhp->nh_proto;
-#ifdef INVARIANTS
-	name = nhp->nh_name;
-#endif
 	KASSERT(proto < NETISR_MAXPROT,
-	    ("%s(%u): protocol too big for %s", __func__, proto, name));
+	    ("%s(%u): protocol too big for %s", __func__, proto, nhp->nh_name));
 
 	NETISR_RLOCK(&tracker);
 	KASSERT(netisr_proto[proto].np_handler != NULL,
 	    ("%s(%u): protocol not registered for %s", __func__, proto,
-	    name));
+	    nhp->nh_name));
 
-	CPU_FOREACH(i) {
-		npwp = &(DPCPU_ID_PTR(i, nws))->nws_work[proto];
-		*qdropp += npwp->nw_qdrops;
-	}
+	*qdropp = 0;
+	for (u_int i = 0; i < nws_count; i++)
+		*qdropp +=
+		    counter_u64_fetch(nws_array[i]->nws_work[proto].nw_qdrops);
 	NETISR_RUNLOCK(&tracker);
 }
 
@@ -559,22 +540,15 @@ void
 netisr_getqlimit(const struct netisr_handler *nhp, u_int *qlimitp)
 {
 	struct rm_priotracker tracker;
-#ifdef INVARIANTS
-	const char *name;
-#endif
-	u_int proto;
+	u_int proto = nhp->nh_proto;
 
-	proto = nhp->nh_proto;
-#ifdef INVARIANTS
-	name = nhp->nh_name;
-#endif
 	KASSERT(proto < NETISR_MAXPROT,
-	    ("%s(%u): protocol too big for %s", __func__, proto, name));
+	    ("%s(%u): protocol too big for %s", __func__, proto, nhp->nh_name));
 
 	NETISR_RLOCK(&tracker);
 	KASSERT(netisr_proto[proto].np_handler != NULL,
 	    ("%s(%u): protocol not registered for %s", __func__, proto,
-	    name));
+	    nhp->nh_name));
 	*qlimitp = netisr_proto[proto].np_qlimit;
 	NETISR_RUNLOCK(&tracker);
 }
@@ -587,33 +561,24 @@ netisr_getqlimit(const struct netisr_handler *nhp, u_int *qlimitp)
 int
 netisr_setqlimit(const struct netisr_handler *nhp, u_int qlimit)
 {
-	struct netisr_work *npwp;
-#ifdef INVARIANTS
-	const char *name;
-#endif
-	u_int i, proto;
+	u_int proto = nhp->nh_proto;
+
+	KASSERT(proto < NETISR_MAXPROT,
+	    ("%s(%u): protocol too big for %s", __func__, proto, nhp->nh_name));
 
 	if (qlimit > netisr_maxqlimit)
 		return (EINVAL);
 
-	proto = nhp->nh_proto;
-#ifdef INVARIANTS
-	name = nhp->nh_name;
-#endif
-	KASSERT(proto < NETISR_MAXPROT,
-	    ("%s(%u): protocol too big for %s", __func__, proto, name));
-
 	NETISR_WLOCK();
 	KASSERT(netisr_proto[proto].np_handler != NULL,
 	    ("%s(%u): protocol not registered for %s", __func__, proto,
-	    name));
+	    nhp->nh_name));
 
 	netisr_proto[proto].np_qlimit = qlimit;
-	CPU_FOREACH(i) {
-		npwp = &(DPCPU_ID_PTR(i, nws))->nws_work[proto];
-		npwp->nw_qlimit = qlimit;
-	}
+	for (u_int i = 0; i < nws_count; i++)
+		nws_array[i]->nws_work[proto].nw_qlimit = qlimit;
 	NETISR_WUNLOCK();
+
 	return (0);
 }
 
@@ -650,23 +615,15 @@ void
 netisr_unregister(const struct netisr_handler *nhp)
 {
 	VNET_ITERATOR_DECL(vnet_iter);
-	struct netisr_work *npwp;
-#ifdef INVARIANTS
-	const char *name;
-#endif
-	u_int i, proto;
+	u_int proto = nhp->nh_proto;
 
-	proto = nhp->nh_proto;
-#ifdef INVARIANTS
-	name = nhp->nh_name;
-#endif
 	KASSERT(proto < NETISR_MAXPROT,
-	    ("%s(%u): protocol too big for %s", __func__, proto, name));
+	    ("%s(%u): protocol too big for %s", __func__, proto, nhp->nh_name));
 
 	NETISR_WLOCK();
 	KASSERT(netisr_proto[proto].np_handler != NULL,
 	    ("%s(%u): protocol not registered for %s", __func__, proto,
-	    name));
+	    nhp->nh_name));
 
 #ifdef VIMAGE
 	VNET_LIST_RLOCK_NOSLEEP();
@@ -684,10 +641,15 @@ netisr_unregister(const struct netisr_handler *nhp)
 	netisr_proto[proto].np_m2cpuid = NULL;
 	netisr_proto[proto].np_qlimit = 0;
 	netisr_proto[proto].np_policy = 0;
-	CPU_FOREACH(i) {
-		npwp = &(DPCPU_ID_PTR(i, nws))->nws_work[proto];
-		netisr_drain_proto(npwp);
-		bzero(npwp, sizeof(*npwp));
+	for (u_int i = 0; i < nws_count; i++) {
+		struct netisr_work *nw = &nws_array[i]->nws_work[proto];
+
+		netisr_drain_proto(nw);
+		counter_u64_free(nw->nw_dispatched);
+		counter_u64_free(nw->nw_hybrid_dispatched);
+		counter_u64_free(nw->nw_qdrops);
+		counter_u64_free(nw->nw_queued);
+		counter_u64_free(nw->nw_handled);
 	}
 	NETISR_WUNLOCK();
 }
@@ -716,29 +678,24 @@ static void
 netisr_drain_proto_vnet(struct vnet *vnet, u_int proto)
 {
 	struct epoch_tracker et;
-	struct netisr_workstream *nwsp;
-	struct netisr_work *npwp;
 	struct mbuf *m, *mp, *n, *ne;
 	struct ifnet *ifp;
-	u_int i;
 
 	KASSERT(vnet != NULL, ("%s: vnet is NULL", __func__));
 	NETISR_LOCK_ASSERT();
 
-	CPU_FOREACH(i) {
-		nwsp = DPCPU_ID_PTR(i, nws);
-		if (nwsp->nws_intr_event == NULL)
-			continue;
-		npwp = &nwsp->nws_work[proto];
-		NWS_LOCK(nwsp);
+	for (u_int i = 0; i < nws_count; i++) {
+		struct netisr_workstream *nws = nws_array[i];
+		struct netisr_work *nw = &nws->nws_work[proto];
 
+		NWS_LOCK(nws);
 		/*
 		 * Rather than dissecting and removing mbufs from the middle
 		 * of the chain, we build a new chain if the packet stays and
 		 * update the head and tail pointers at the end.  All packets
 		 * matching the given vnet are freed.
 		 */
-		m = npwp->nw_head;
+		m = nw->nw_head;
 		n = ne = NULL;
 		NET_EPOCH_ENTER(et);
 		while (m != NULL) {
@@ -758,13 +715,13 @@ netisr_drain_proto_vnet(struct vnet *vnet, u_int proto)
 			}
 			/* This is a packet in the selected vnet, or belongs
 			   to destroyed interface. Free it. */
-			npwp->nw_len--;
+			nw->nw_len--;
 			m_freem(mp);
 		}
 		NET_EPOCH_EXIT(et);
-		npwp->nw_head = n;
-		npwp->nw_tail = ne;
-		NWS_UNLOCK(nwsp);
+		nw->nw_head = n;
+		nw->nw_tail = ne;
+		NWS_UNLOCK(nws);
 	}
 }
 
@@ -812,8 +769,8 @@ netisr_get_dispatch(struct netisr_proto *npp)
  * for assistance if required.
  */
 static struct mbuf *
-netisr_select_cpuid(struct netisr_proto *npp, u_int dispatch_policy,
-    uintptr_t source, struct mbuf *m, u_int *cpuidp)
+netisr_select_nws(struct netisr_proto *npp, u_int dispatch_policy,
+    uintptr_t source, struct mbuf *m, u_int *nws_id)
 {
 	struct ifnet *ifp;
 	u_int policy;
@@ -825,7 +782,7 @@ netisr_select_cpuid(struct netisr_proto *npp, u_int dispatch_policy,
 	 * without further ado.
 	 */
 	if (nws_count == 1) {
-		*cpuidp = nws_array[0];
+		*nws_id = 0;
 		return (m);
 	}
 
@@ -836,7 +793,7 @@ netisr_select_cpuid(struct netisr_proto *npp, u_int dispatch_policy,
 	 */
 	policy = npp->np_policy;
 	if (policy == NETISR_POLICY_CPU) {
-		m = npp->np_m2cpuid(m, source, cpuidp);
+		m = npp->np_m2cpuid(m, source, nws_id);
 		if (m == NULL)
 			return (NULL);
 
@@ -848,12 +805,12 @@ netisr_select_cpuid(struct netisr_proto *npp, u_int dispatch_policy,
 		 * dispatch.  In the queued case, fall back on the SOURCE
 		 * policy.
 		 */
-		if (*cpuidp != NETISR_CPUID_NONE) {
-			*cpuidp = nws_array[*cpuidp % nws_count];
+		if (*nws_id != NETISR_CPUID_NONE) {
+			*nws_id = *nws_id % nws_count;
 			return (m);
 		}
 		if (dispatch_policy == NETISR_DISPATCH_HYBRID) {
-			*cpuidp = nws_array[curcpu % nws_count];
+			*nws_id = curcpu % nws_count;
 			return (m);
 		}
 		policy = NETISR_POLICY_SOURCE;
@@ -867,7 +824,7 @@ netisr_select_cpuid(struct netisr_proto *npp, u_int dispatch_policy,
 				return (NULL);
 		}
 		if (M_HASHTYPE_GET(m) != M_HASHTYPE_NONE) {
-			*cpuidp = nws_array[m->m_pkthdr.flowid % nws_count];
+			*nws_id = m->m_pkthdr.flowid % nws_count;
 			return (m);
 		}
 		policy = NETISR_POLICY_SOURCE;
@@ -880,9 +837,9 @@ netisr_select_cpuid(struct netisr_proto *npp, u_int dispatch_policy,
 	MPASS((m->m_pkthdr.csum_flags & CSUM_SND_TAG) == 0);
 	ifp = m->m_pkthdr.rcvif;
 	if (ifp != NULL)
-		*cpuidp = nws_array[(ifp->if_index + source) % nws_count];
+		*nws_id = (ifp->if_index + source) % nws_count;
 	else
-		*cpuidp = nws_array[source % nws_count];
+		*nws_id = source % nws_count;
 	return (m);
 }
 
@@ -947,7 +904,7 @@ netisr_process_workstream_proto(struct netisr_workstream *nwsp, u_int proto)
 	if (netisr_proto[proto].np_drainedcpu)
 		netisr_proto[proto].np_drainedcpu(nwsp->nws_cpu);
 	NWS_LOCK(nwsp);
-	npwp->nw_handled += handled;
+	counter_u64_add(npwp->nw_handled, handled);
 	return (handled);
 }
 
@@ -1032,17 +989,17 @@ netisr_queue_workstream(struct netisr_workstream *nwsp, u_int proto,
 			nwsp->nws_flags |= NWS_SCHEDULED;
 			*dosignalp = 1;	/* Defer until unlocked. */
 		}
-		npwp->nw_queued++;
+		counter_u64_add(npwp->nw_queued, 1);
 		return (0);
 	} else {
 		m_freem(m);
-		npwp->nw_qdrops++;
+		counter_u64_add(npwp->nw_qdrops, 1);
 		return (ENOBUFS);
 	}
 }
 
 static int
-netisr_queue_internal(u_int proto, struct mbuf *m, u_int cpuid)
+netisr_queue_internal(u_int proto, struct mbuf *m, u_int nws_id)
 {
 	struct netisr_workstream *nwsp;
 	struct netisr_work *npwp;
@@ -1051,13 +1008,11 @@ netisr_queue_internal(u_int proto, struct mbuf *m, u_int cpuid)
 #ifdef NETISR_LOCKING
 	NETISR_LOCK_ASSERT();
 #endif
-	KASSERT(cpuid <= mp_maxid, ("%s: cpuid too big (%u, %u)", __func__,
-	    cpuid, mp_maxid));
-	KASSERT(!CPU_ABSENT(cpuid), ("%s: CPU %u absent", __func__, cpuid));
+	MPASS(nws_id < nws_count);
 
 	dosignal = 0;
 	error = 0;
-	nwsp = DPCPU_ID_PTR(cpuid, nws);
+	nwsp = nws_array[nws_id];
 	npwp = &nwsp->nws_work[proto];
 	NWS_LOCK(nwsp);
 	error = netisr_queue_workstream(nwsp, proto, npwp, m, &dosignal);
@@ -1073,7 +1028,7 @@ netisr_queue_src(u_int proto, uintptr_t source, struct mbuf *m)
 #ifdef NETISR_LOCKING
 	struct rm_priotracker tracker;
 #endif
-	u_int cpuid;
+	u_int nws_id;
 	int error;
 
 	KASSERT(proto < NETISR_MAXPROT,
@@ -1092,14 +1047,12 @@ netisr_queue_src(u_int proto, uintptr_t source, struct mbuf *m)
 	}
 #endif
 
-	m = netisr_select_cpuid(&netisr_proto[proto], NETISR_DISPATCH_DEFERRED,
-	    source, m, &cpuid);
+	m = netisr_select_nws(&netisr_proto[proto], NETISR_DISPATCH_DEFERRED,
+	    source, m, &nws_id);
 	if (m != NULL) {
-		KASSERT(!CPU_ABSENT(cpuid), ("%s: CPU %u absent", __func__,
-		    cpuid));
 		VNET_ASSERT(m->m_pkthdr.rcvif != NULL,
 		    ("%s:%d rcvif == NULL: m=%p", __func__, __LINE__, m));
-		error = netisr_queue_internal(proto, m, cpuid);
+		error = netisr_queue_internal(proto, m, nws_id);
 	} else
 		error = ENOBUFS;
 #ifdef NETISR_LOCKING
@@ -1129,7 +1082,7 @@ netisr_dispatch_src(u_int proto, uintptr_t source, struct mbuf *m)
 	struct netisr_proto *npp;
 	struct netisr_work *npwp;
 	int dosignal, error;
-	u_int cpuid, dispatch_policy;
+	u_int nws_id, dispatch_policy;
 
 	NET_EPOCH_ASSERT();
 	KASSERT(proto < NETISR_MAXPROT,
@@ -1155,15 +1108,15 @@ netisr_dispatch_src(u_int proto, uintptr_t source, struct mbuf *m)
 	/*
 	 * If direct dispatch is forced, then unconditionally dispatch
 	 * without a formal CPU selection.  Borrow the current CPU's stats,
-	 * even if there's no worker on it.  In this case we don't update
-	 * nws_flags because all netisr processing will be source ordered due
-	 * to always being forced to directly dispatch.
+	 * without pinning, though.  In this case we don't update nws_flags
+	 * because all netisr processing will be source ordered due to always
+	 * being forced to directly dispatch.
 	 */
 	if (dispatch_policy == NETISR_DISPATCH_DIRECT) {
-		nwsp = DPCPU_PTR(nws);
+		nwsp = nws_array[curcpu % nws_count];
 		npwp = &nwsp->nws_work[proto];
-		npwp->nw_dispatched++;
-		npwp->nw_handled++;
+		counter_u64_add(npwp->nw_dispatched, 1);
+		counter_u64_add(npwp->nw_handled, 1);
 		netisr_proto[proto].np_handler(m);
 		error = 0;
 		goto out_unlock;
@@ -1178,16 +1131,15 @@ netisr_dispatch_src(u_int proto, uintptr_t source, struct mbuf *m)
 	 * already running.
 	 */
 	sched_pin();
-	m = netisr_select_cpuid(&netisr_proto[proto], NETISR_DISPATCH_HYBRID,
-	    source, m, &cpuid);
+	m = netisr_select_nws(&netisr_proto[proto], NETISR_DISPATCH_HYBRID,
+	    source, m, &nws_id);
 	if (m == NULL) {
 		error = ENOBUFS;
 		goto out_unpin;
 	}
-	KASSERT(!CPU_ABSENT(cpuid), ("%s: CPU %u absent", __func__, cpuid));
-	if (cpuid != curcpu)
+	if (netisr_bindthreads && nws_id != curcpu % nws_count)
 		goto queue_fallback;
-	nwsp = DPCPU_PTR(nws);
+	nwsp = nws_array[nws_id];
 	npwp = &nwsp->nws_work[proto];
 
 	/*-
@@ -1218,8 +1170,8 @@ netisr_dispatch_src(u_int proto, uintptr_t source, struct mbuf *m)
 	netisr_proto[proto].np_handler(m);
 	NWS_LOCK(nwsp);
 	nwsp->nws_flags &= ~NWS_DISPATCHING;
-	npwp->nw_handled++;
-	npwp->nw_hybrid_dispatched++;
+	counter_u64_add(npwp->nw_handled, 1);
+	counter_u64_add(npwp->nw_hybrid_dispatched, 1);
 
 	/*
 	 * If other work was enqueued by another thread while we were direct
@@ -1241,7 +1193,7 @@ netisr_dispatch_src(u_int proto, uintptr_t source, struct mbuf *m)
 	goto out_unpin;
 
 queue_fallback:
-	error = netisr_queue_internal(proto, m, cpuid);
+	error = netisr_queue_internal(proto, m, nws_id);
 out_unpin:
 	sched_unpin();
 out_unlock:
@@ -1269,7 +1221,7 @@ netisr_sched_poll(void)
 {
 	struct netisr_workstream *nwsp;
 
-	nwsp = DPCPU_ID_PTR(nws_array[0], nws);
+	nwsp = nws_array[0];
 	NWS_SIGNAL(nwsp);
 }
 #endif
@@ -1278,27 +1230,24 @@ static void
 netisr_start_swi(u_int cpuid, struct pcpu *pc)
 {
 	char swiname[12];
-	struct netisr_workstream *nwsp;
-	int error;
+	struct netisr_workstream *nws;
+	int error __diagused;
 
 	KASSERT(!CPU_ABSENT(cpuid), ("%s: CPU %u absent", __func__, cpuid));
 
-	nwsp = DPCPU_ID_PTR(cpuid, nws);
-	mtx_init(&nwsp->nws_mtx, "netisr_mtx", NULL, MTX_DEF);
-	nwsp->nws_cpu = cpuid;
+	nws = malloc(sizeof(*nws), M_NETISR, M_WAITOK | M_ZERO);
+	mtx_init(&nws->nws_mtx, "netisr", NULL, MTX_DEF);
 	snprintf(swiname, sizeof(swiname), "netisr %u", cpuid);
-	error = swi_add(&nwsp->nws_intr_event, swiname, swi_net, nwsp,
-	    SWI_NET, INTR_TYPE_NET | INTR_MPSAFE, &nwsp->nws_swi_cookie);
-	if (error)
-		panic("%s: swi_add %d", __func__, error);
+	error = swi_add(&nws->nws_intr_event, swiname, swi_net, nws,
+	    SWI_NET, INTR_TYPE_NET | INTR_MPSAFE, &nws->nws_swi_cookie);
+	MPASS(!error);
 	if (netisr_bindthreads) {
-		error = intr_event_bind(nwsp->nws_intr_event, cpuid);
-		if (error != 0)
-			printf("%s: cpu %u: intr_event_bind: %d", __func__,
-			    cpuid, error);
+		nws->nws_cpu = cpuid;
+		error = intr_event_bind(nws->nws_intr_event, cpuid);
+		MPASS(!error);
 	}
 	NETISR_WLOCK();
-	nws_array[nws_count] = nwsp->nws_cpu;
+	nws_array[nws_count] = nws;
 	nws_count++;
 	NETISR_WUNLOCK();
 }
@@ -1411,8 +1360,7 @@ sysctl_netisr_workstream(SYSCTL_HANDLER_ARGS)
 {
 	struct rm_priotracker tracker;
 	struct sysctl_netisr_workstream *snwsp, *snws_array;
-	struct netisr_workstream *nwsp;
-	u_int counter, cpuid;
+	u_int counter;
 	int error;
 
 	if (req->newptr != NULL)
@@ -1421,11 +1369,10 @@ sysctl_netisr_workstream(SYSCTL_HANDLER_ARGS)
 	    M_ZERO | M_WAITOK);
 	counter = 0;
 	NETISR_RLOCK(&tracker);
-	CPU_FOREACH(cpuid) {
-		nwsp = DPCPU_ID_PTR(cpuid, nws);
-		if (nwsp->nws_intr_event == NULL)
-			continue;
-		NWS_LOCK(nwsp);
+	for (u_int i = 0; i < nws_count; i++) {
+		struct netisr_workstream *nws = nws_array[i];
+
+		NWS_LOCK(nws);
 		snwsp = &snws_array[counter];
 		snwsp->snws_version = sizeof(*snwsp);
 
@@ -1434,11 +1381,11 @@ sysctl_netisr_workstream(SYSCTL_HANDLER_ARGS)
 		 * kernel, but expose them independently to userspace in case
 		 * that assumption changes in the future.
 		 */
-		snwsp->snws_wsid = cpuid;
-		snwsp->snws_cpu = cpuid;
-		if (nwsp->nws_intr_event != NULL)
+		snwsp->snws_wsid = i;
+		snwsp->snws_cpu = nws->nws_cpu;
+		if (nws->nws_intr_event != NULL)
 			snwsp->snws_flags |= NETISR_SNWS_FLAGS_INTR;
-		NWS_UNLOCK(nwsp);
+		NWS_UNLOCK(nws);
 		counter++;
 	}
 	NETISR_RUNLOCK(&tracker);
@@ -1466,7 +1413,7 @@ sysctl_netisr_work(SYSCTL_HANDLER_ARGS)
 	struct netisr_workstream *nwsp;
 	struct netisr_proto *npp;
 	struct netisr_work *nwp;
-	u_int counter, cpuid, proto;
+	u_int counter, proto;
 	int error;
 
 	if (req->newptr != NULL)
@@ -1475,10 +1422,8 @@ sysctl_netisr_work(SYSCTL_HANDLER_ARGS)
 	    M_TEMP, M_ZERO | M_WAITOK);
 	counter = 0;
 	NETISR_RLOCK(&tracker);
-	CPU_FOREACH(cpuid) {
-		nwsp = DPCPU_ID_PTR(cpuid, nws);
-		if (nwsp->nws_intr_event == NULL)
-			continue;
+	for (u_int i = 0; i < nws_count; i++) {
+		nwsp = nws_array[i];
 		NWS_LOCK(nwsp);
 		for (proto = 0; proto < NETISR_MAXPROT; proto++) {
 			npp = &netisr_proto[proto];
@@ -1487,16 +1432,17 @@ sysctl_netisr_work(SYSCTL_HANDLER_ARGS)
 			nwp = &nwsp->nws_work[proto];
 			snwp = &snw_array[counter];
 			snwp->snw_version = sizeof(*snwp);
-			snwp->snw_wsid = cpuid;		/* See comment above. */
+			snwp->snw_wsid = i;		/* See comment above. */
 			snwp->snw_proto = proto;
 			snwp->snw_len = nwp->nw_len;
 			snwp->snw_watermark = nwp->nw_watermark;
-			snwp->snw_dispatched = nwp->nw_dispatched;
+			snwp->snw_dispatched =
+			    counter_u64_fetch(nwp->nw_dispatched);
 			snwp->snw_hybrid_dispatched =
-			    nwp->nw_hybrid_dispatched;
-			snwp->snw_qdrops = nwp->nw_qdrops;
-			snwp->snw_queued = nwp->nw_queued;
-			snwp->snw_handled = nwp->nw_handled;
+			    counter_u64_fetch(nwp->nw_hybrid_dispatched);
+			snwp->snw_qdrops = counter_u64_fetch(nwp->nw_qdrops);
+			snwp->snw_queued = counter_u64_fetch(nwp->nw_queued);
+			snwp->snw_handled = counter_u64_fetch(nwp->nw_handled);
 			counter++;
 		}
 		NWS_UNLOCK(nwsp);
