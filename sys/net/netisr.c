@@ -752,12 +752,17 @@ netisr_queue_internal(u_int proto, struct mbuf *m, u_int nws_id)
 	int error;
 
 	m_rcvif_serialize(m);
-	error = buf_ring_enqueue(nw->nw_br, m);
-	if (__predict_true(error == 0))
-		counter_u64_add(nw->nw_queued, 1);
-	else
+	error = buf_ring_enqueue_empty(nw->nw_br, m);
+	if (__predict_false(error < 0)) {
 		m_freem(m);
-	NWS_SIGNAL(nws);
+		return (-error);
+	}
+	counter_u64_add(nw->nw_queued, 1);
+	if (error > 0) {
+		/* Ring was empty. */
+		NWS_SIGNAL(nws);
+		error = 0;
+	}
 
 	return (error);
 }
