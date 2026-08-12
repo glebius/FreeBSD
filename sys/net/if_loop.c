@@ -40,6 +40,7 @@
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/kernel.h>
+#include <sys/proc.h>
 #include <sys/mbuf.h>
 #include <sys/module.h>
 #include <machine/bus.h>
@@ -329,7 +330,8 @@ if_simloop(struct ifnet *ifp, struct mbuf *m, int af, int hlen)
 		return (EAFNOSUPPORT);
 	}
 	len = m->m_pkthdr.len;
-	if (netisr_queue(isr, m) == 0) {
+	if (netisr_queue_src(isr,
+	    (uintptr_t)curthread / sizeof(struct thread), m) == 0) {
 		if_inc_counter(ifp, IFCOUNTER_IPACKETS, 1);
 		if_inc_counter(ifp, IFCOUNTER_IBYTES, len);
 	} else {
