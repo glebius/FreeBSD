@@ -31,6 +31,7 @@
 .Nm buf_ring_alloc ,
 .Nm buf_ring_free ,
 .Nm buf_ring_enqueue ,
+.Nm buf_ring_enqueue_empty ,
 .Nm buf_ring_dequeue_mc ,
 .Nm buf_ring_dequeue_sc ,
 .Nm buf_ring_count ,
@@ -50,6 +51,8 @@
 .Fn buf_ring_free_epoch "struct buf_ring *br" "epoch_t epoch" "br_epoch_free_t freefn"
 .Ft int
 .Fn buf_ring_enqueue "struct buf_ring *br" "void *buf"
+.Ft int
+.Fn buf_ring_enqueue_empty "struct buf_ring *br" "void *buf"
 .Ft void *
 .Fn buf_ring_dequeue_mc "struct buf_ring *br"
 .Ft void *
@@ -102,7 +105,9 @@ when the ring was allocated.
 .Pp
 The
 .Fn buf_ring_enqueue
-function is used to enqueue a buffer to a buf_ring.
+and
+.Fn buf_ring_enqueue_empty
+functions are used to enqueue a buffer to a buf_ring.
 .Pp
 The
 .Fn buf_ring_dequeue_mc
@@ -151,6 +156,13 @@ The
 function return
 .Er ENOBUFS
 if there are no available slots in the buf_ring.
+The
+.Fn buf_ring_enqueue_empty
+returns positive value if the ring was empty before the enqueue and returns
+zero otherwise.
+If the ring was full a negative error code
+.Er -ENOBUFS
+is returned.
 .Sh HISTORY
 These functions were introduced in
 .Fx 8.0 .
