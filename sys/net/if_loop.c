@@ -40,6 +40,7 @@
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/kernel.h>
+#include <sys/proc.h>
 #include <sys/mbuf.h>
 #include <sys/module.h>
 #include <machine/bus.h>
