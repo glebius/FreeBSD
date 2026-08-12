@@ -82,7 +82,7 @@ struct buf_ring {
  *
  */
 static __inline int
-buf_ring_enqueue(struct buf_ring *br, void *buf)
+__buf_ring_enqueue(struct buf_ring *br, void *buf, bool return_empty)
 {
 	uint32_t prod_head, prod_next, prod_idx;
 	uint32_t cons_tail, mask;
@@ -122,7 +122,7 @@ buf_ring_enqueue(struct buf_ring *br, void *buf)
 			    cons_tail == atomic_load_32(&br->br_cons_tail)) {
 				critical_exit();
 				counter_u64_add(br->br_drops, 1);
-				return (ENOBUFS);
+				return (return_empty ? -ENOBUFS : ENOBUFS);
 			}
 			continue;
 		}
@@ -143,7 +143,22 @@ buf_ring_enqueue(struct buf_ring *br, void *buf)
 		cpu_spinwait();
 	atomic_store_rel_32(&br->br_prod_tail, prod_next);
 	critical_exit();
-	return (0);
+	if (return_empty)
+		return (prod_head == atomic_load_acq_32(&br->br_cons_head));
+	else
+		return (0);
+}
+
+static __inline int
+buf_ring_enqueue(struct buf_ring *br, void *buf)
+{
+	return (__buf_ring_enqueue(br, buf, false));
+}
+
+static __inline int
+buf_ring_enqueue_empty(struct buf_ring *br, void *buf)
+{
+	return (__buf_ring_enqueue(br, buf, true));
 }
 
 /*
@@ -218,7 +233,7 @@ buf_ring_dequeue_sc(struct buf_ring *br)
 		return (NULL);
 
 	cons_idx = cons_head & mask;
-	atomic_store_32(&br->br_cons_head, cons_next);
+	atomic_store_rel_32(&br->br_cons_head, cons_next);
 	buf = br->br_ring[cons_idx];
 
 #ifdef DEBUG_BUFRING
