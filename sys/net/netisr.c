@@ -82,6 +82,7 @@
 #include <sys/socket.h>
 #include <sys/sysctl.h>
 #include <sys/systm.h>
+#include <sys/ktr.h>
 
 #include <net/if.h>
 #include <net/if_var.h>
@@ -125,6 +126,7 @@ struct netisr_workstream {
 		NWS_RUNNING	= 0x00000001,	/* running in a thread */
 		NWS_DISPATCHING	= 0x00000002,	/* being direct-dispatched */
 		NWS_SCHEDULED	= 0x00000004,	/* Signal issued. */
+		NWS_OVERFLOWED	= 0x00000008,
 	} nws_flags;
 	u_int		 nws_pendingbits;	/* Scheduled protocols. */
 
@@ -691,6 +693,7 @@ swi_net(void *arg)
 {
 	struct netisr_workstream *nws = arg;
 	u_int proto;
+	bool doagain;
 
 #ifdef DEVICE_POLLING
 	KASSERT(nws_count == 1,
@@ -698,6 +701,9 @@ swi_net(void *arg)
 	netisr_poll();
 #endif
 	NWS_LOCK(nws);
+	CTR1(KTR_SPARE4, "%p swi start", nws);
+again:
+	doagain = false;
 	for (proto = 0; proto < NETISR_MAXPROT; proto++) {
 		struct netisr_proto *np = &netisr_proto[proto];
 		struct netisr_work *nw = &nws->nws_work[proto];
@@ -731,13 +737,19 @@ swi_net(void *arg)
 			CURVNET_SET(m->m_pkthdr.rcvif->if_vnet);
 			netisr_proto[proto].np_handler(m);
 			CURVNET_RESTORE();
-			if (handled >= np->np_qlimit)
+			if (handled >= np->np_qlimit) {
+				doagain = true;
 				break;
+			}
 		}
 		if (netisr_proto[proto].np_drainedcpu)
 			netisr_proto[proto].np_drainedcpu(nws->nws_cpu);
 		counter_u64_add(nw->nw_handled, handled);
 	}
+	if (doagain)
+		goto again;
+	nws->nws_flags &= ~NWS_OVERFLOWED;
+	CTR1(KTR_SPARE4, "%p swi done", nws);
 	NWS_UNLOCK(nws);
 #ifdef DEVICE_POLLING
 	netisr_pollmore();
@@ -755,11 +767,16 @@ netisr_queue_internal(u_int proto, struct mbuf *m, u_int nws_id)
 	error = buf_ring_enqueue_empty(nw->nw_br, m);
 	if (__predict_false(error < 0)) {
 		m_freem(m);
+		if (!(nws->nws_flags & NWS_OVERFLOWED)) {
+			nws->nws_flags |= NWS_OVERFLOWED;
+			CTR1(KTR_SPARE4, "%p overflow", nws);
+		}
 		return (-error);
 	}
 	counter_u64_add(nw->nw_queued, 1);
 	if (error > 0) {
 		/* Ring was empty. */
+		CTR1(KTR_SPARE4, "%p swi_sched", nws);
 		NWS_SIGNAL(nws);
 		error = 0;
 	}
