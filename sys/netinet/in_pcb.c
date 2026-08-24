@@ -737,12 +737,32 @@ static MALLOC_DEFINE(M_LPORTS, "inp_lports", "inpcb lport cache");
 BITSET_DEFINE(lportbits, PORTBITS);
 struct lport_cache {
 	struct lportbits lports;
+	struct lport_cache *successor;
+	uint64_t age;
 	u_int refcount;
 #ifdef INVARIANTS
 	union in_dependaddr faddr;
 	uint16_t fport;
 #endif
 };
+
+/*
+ * Remove one reference from cache, potentially freeing a chain.
+ */
+static struct lport_cache *
+lport_cache_release(struct lport_cache *cache)
+{
+
+	while (cache != NULL && refcount_release(&cache->refcount)) {
+		struct lport_cache *next;
+
+		next = atomic_load_ptr(&cache->successor);
+		free(cache, M_LPORTS);
+		cache = next;
+	}
+
+	return (cache);
+}
 
 static inline void
 lport_acquire(struct lportbits *lports, uint16_t port)
@@ -766,6 +786,30 @@ static inline void
 lport_merge(struct lportbits *dst, struct lportbits *src)
 {
 	BIT_OR_ATOMIC(PORTBITS, dst, src);
+}
+
+/*
+ * Return inp->inp_lport_cache, potentially promoting it.
+ */
+static struct lport_cache *
+in_pcb_lport_cache(struct inpcb *inp)
+{
+	struct lport_cache *cache, *next;
+
+	INP_WLOCK_ASSERT(inp);
+
+	if ((cache = inp->inp_lport_cache) != NULL)
+		while ((next = atomic_load_ptr(&cache->successor)) != NULL) {
+			MPASS(next != cache);
+			inp->inp_lport_cache = next;
+			if (refcount_release(&cache->refcount))
+				free(cache, M_LPORTS);
+			else
+				refcount_acquire(&next->refcount);
+			cache = next;
+		}
+
+	return (inp->inp_lport_cache);
 }
 
 static void
@@ -794,18 +838,26 @@ in_pcb_cache_lport(struct inpcb *new, struct inpcb *old)
 	if (in_nullhost(old->inp_faddr))
 		goto out;
 
+	(void)in_pcb_lport_cache(new);
+	(void)in_pcb_lport_cache(old);
+
 	if (new->inp_lport_cache == NULL &&
 	    old->inp_lport_cache == NULL) {
+		static uint64_t	age;
+
 		cache = malloc(sizeof(*cache), M_LPORTS, M_ZERO | M_NOWAIT);
 		if (__predict_false(cache == NULL))
 			goto out;
 		refcount_init(&cache->refcount, 2);
+		cache->age = atomic_fetchadd_64(&age, 1);
 #ifdef INVARIANTS
 		cache->faddr = old->inp_inc.inc_ie.ie_dependfaddr;
 		cache->fport = old->inp_fport;
 #endif
 		lport_acquire(&cache->lports, ntohs(old->inp_lport));
 		new->inp_lport_cache = old->inp_lport_cache = cache;
+	} else if (new->inp_lport_cache == old->inp_lport_cache) {
+		/* Race: old has grabbed the port after our lport_check(). */
 	} else if (new->inp_lport_cache == NULL) {
 		cache = old->inp_lport_cache;
 		MPASS(memcmp(&old->inp_inc.inc_ie.ie_dependfaddr,
@@ -824,14 +876,21 @@ in_pcb_cache_lport(struct inpcb *new, struct inpcb *old)
 	} else {
 		struct lport_cache *second;
 
-		if (refcount_load(&new->inp_lport_cache->refcount) >
-		    refcount_load(&old->inp_lport_cache->refcount)) {
+		/*
+		 * We can't use caches refcounts here, as it makes it possible
+		 * for two competing caches to be linked against each other by
+		 * two parallel threads.  We use age speculating that an older
+		 * cache usually holds more bits.
+		 */
+		if (new->inp_lport_cache->age < old->inp_lport_cache->age) {
 			cache = new->inp_lport_cache;
 			second = old->inp_lport_cache;
+			MPASS(cache != second);
 			old->inp_lport_cache = cache;
 		} else {
 			cache = old->inp_lport_cache;
 			second = new->inp_lport_cache;
+			MPASS(cache != second);
 			new->inp_lport_cache = cache;
 		}
 		MPASS(memcmp(&old->inp_inc.inc_ie.ie_dependfaddr,
@@ -842,8 +901,17 @@ in_pcb_cache_lport(struct inpcb *new, struct inpcb *old)
 		MPASS(second->fport == cache->fport);
 		lport_merge(&cache->lports, &second->lports);
 		refcount_acquire(&cache->refcount);
-		if (refcount_release(&second->refcount))
-			free(second, M_LPORTS);
+		/*
+		 * Now both inpcbs and winning cache are all set, and tricky
+		 * part is to dereference 'second'.  Three possibilities here:
+		 * 1) our reference was the last and we free it 2) we were not
+		 * the last so make it point at the winner 3) we lost the race
+		 * to other thread that was doing the same.
+		 */
+		if (lport_cache_release(second) == second &&
+		    atomic_cmpset_ptr((uintptr_t *)&second->successor,
+		    (uintptr_t)NULL, (uintptr_t)cache))
+			refcount_acquire(&cache->refcount);
 	}
 out:
 	INP_WUNLOCK(old);
@@ -852,15 +920,30 @@ out:
 void
 in_pcb_lport_cache_free(struct inpcb *inp)
 {
+	struct lport_cache *cache = inp->inp_lport_cache;
+
 	INP_WLOCK_ASSERT(inp);
 
-	if (inp->inp_lport_cache != NULL) {
-		lport_release(&inp->inp_lport_cache->lports,
-		    ntohs(inp->inp_lport));
-		if (refcount_release(&inp->inp_lport_cache->refcount))
-			free(inp->inp_lport_cache, M_LPORTS);
-		inp->inp_lport_cache = NULL;
+	/* Free possible chain of caches, where we were the last reference. */
+	while (cache != NULL && refcount_release(&cache->refcount)) {
+		struct lport_cache *next;
+
+		MPASS(memcmp(&inp->inp_inc.inc_ie.ie_dependfaddr,
+		    &cache->faddr, sizeof(union in_dependaddr)) == 0);
+		MPASS(inp->inp_fport == cache->fport);
+		next = atomic_load_ptr(&cache->successor);
+		free(cache, M_LPORTS);
+		cache = next;
 	}
+	/* Walk through the remaining chain and clear our bit. */
+	while (cache != NULL) {
+		MPASS(memcmp(&inp->inp_inc.inc_ie.ie_dependfaddr,
+		    &cache->faddr, sizeof(union in_dependaddr)) == 0);
+		MPASS(inp->inp_fport == cache->fport);
+		lport_release(&cache->lports, ntohs(inp->inp_lport));
+		cache = atomic_load_ptr(&cache->successor);
+	}
+	inp->inp_lport_cache = NULL;
 }
 
 /*
@@ -954,9 +1037,10 @@ in_pcb_lport_dest(struct inpcbinfo_ctx *ipictx, struct inpcb *inp,
 			.pcbinfo = ipictx->pcbinfo
 		};
 		struct inpcb *tmpinp = NULL;
+		struct lport_cache *cache;
 
-		if (inp->inp_lport_cache != NULL &&
-		    lport_check(&inp->inp_lport_cache->lports, port))
+		if ((cache = in_pcb_lport_cache(inp)) != NULL &&
+		    lport_check(&cache->lports, port))
 			goto next;
 
 		lport = htons(port);
@@ -1018,7 +1102,10 @@ next:
 	}
 
 	if (count == 0)	{ /* completely used? */
-		in_pcb_lport_cache_free(inp);
+		if (inp->inp_lport_cache != NULL) {
+			lport_cache_release(inp->inp_lport_cache);
+			inp->inp_lport_cache = NULL;
+		}
 		return (EADDRNOTAVAIL);
 	}
 
