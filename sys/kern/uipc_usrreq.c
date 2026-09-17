@@ -5,7 +5,7 @@
  *	The Regents of the University of California. All Rights Reserved.
  * Copyright (c) 2004-2009 Robert N. M. Watson All Rights Reserved.
  * Copyright (c) 2018 Matthew Macy
- * Copyright (c) 2022-2025 Gleb Smirnoff <glebius@FreeBSD.org>
+ * Copyright (c) 2022-2026 Gleb Smirnoff <glebius@FreeBSD.org>
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -56,6 +56,7 @@
  *	need a proper out-of-band
  */
 
+#include "opt_capsicum.h"
 #include "opt_ddb.h"
 
 #include <sys/param.h>
@@ -115,6 +116,26 @@ static struct unp_head	unp_shead;	/* (l) List of stream sockets. */
 static struct unp_head	unp_dhead;	/* (l) List of datagram sockets. */
 static struct unp_head	unp_sphead;	/* (l) List of seqpacket sockets. */
 static struct mtx_pool	*unp_vp_mtxpool;
+
+static RB_HEAD(abstract_tree_t, unpcb) abstracts;
+static inline int
+abstract_compare(const struct unpcb *a, const struct unpcb *b)
+{
+	const struct prison *apr = a->unp_socket->so_cred->cr_prison;
+	const struct prison *bpr = b->unp_socket->so_cred->cr_prison;
+	short atype = a->unp_socket->so_type;
+	short btype = b->unp_socket->so_type;
+
+	if (apr != bpr)
+		return ((apr > bpr) - (apr < bpr));
+	if (atype != btype)
+		return ((atype > btype) - (atype < btype));
+	if (a->unp_addr->sun_len != b->unp_addr->sun_len)
+		return ((int)a->unp_addr->sun_len - (int)b->unp_addr->sun_len);
+	return (memcmp(a->unp_addr->sun_path, b->unp_addr->sun_path,
+	    a->unp_addr->sun_len - offsetof(struct sockaddr_un, sun_path)));
+}
+RB_GENERATE_STATIC(abstract_tree_t, unpcb, unp_abstree, abstract_compare);
 
 struct unp_defer {
 	SLIST_ENTRY(unp_defer) ud_link;
@@ -251,6 +272,7 @@ SYSCTL_INT(_net_local, OID_AUTO, deferred, CTLFLAG_RD,
  */
 static struct rwlock	unp_link_rwlock;
 static struct mtx	unp_defers_lock;
+static struct rwlock	unp_abstract_lock;
 
 #define	UNP_LINK_LOCK_INIT()		rw_init(&unp_link_rwlock,	\
 					    "unp_link_rwlock")
@@ -275,6 +297,11 @@ static struct mtx	unp_defers_lock;
 
 #define UNP_REF_LIST_LOCK()		UNP_DEFERRED_LOCK();
 #define UNP_REF_LIST_UNLOCK()		UNP_DEFERRED_UNLOCK();
+
+#define	UNP_ABSTRACT_RLOCK()		rw_rlock(&unp_abstract_lock)
+#define	UNP_ABSTRACT_RUNLOCK()		rw_runlock(&unp_abstract_lock)
+#define	UNP_ABSTRACT_WLOCK()		rw_wlock(&unp_abstract_lock)
+#define	UNP_ABSTRACT_WUNLOCK()		rw_wunlock(&unp_abstract_lock)
 
 #define UNP_PCB_LOCK_INIT(unp)		mtx_init(&(unp)->unp_mtx,	\
 					    "unp", "unp",	\
@@ -588,29 +615,66 @@ unp_sun_path(const struct sockaddr *nam, const char **pathp, int *lenp)
 	return (0);
 }
 
+/*
+ * Abstract names are not reachable in capability mode.
+ */
+static inline int
+unp_abstract_capcheck(struct thread *td)
+{
+#ifdef CAPABILITY_MODE
+	if (CAP_TRACING(td))
+		ktrcapfail(CAPFAIL_NAMEI, "abstract socket");
+	if (IN_CAPABILITY_MODE(td))
+		return (ECAPMODE);
+#endif
+	return (0);
+}
+
 static int
 uipc_bindat(int fd, struct socket *so, struct sockaddr *nam, struct thread *td)
 {
+	struct unpcb *unp = sotounpcb(so);
 	struct sockaddr_un *soun;
 	struct vattr vattr;
 	int error, namelen;
 	struct nameidata nd;
-	struct unpcb *unp;
 	struct vnode *vp;
 	struct mount *mp;
 	cap_rights_t rights;
 	const char *path;
 	char *buf;
 	mode_t mode;
+	bool abstract, automatic;
 
 	error = unp_sun_path(nam, &path, &namelen);
 	if (error != 0)
 		return (error);
-	if (namelen == 0)
-		return (EINVAL);
 
-	unp = sotounpcb(so);
-	KASSERT(unp != NULL, ("uipc_bind: unp == NULL"));
+	 /*
+	  * An initial NUL byte marks an abstract name.  Zero length marks
+	  * request for automatic name.
+	  */
+	if ((abstract = ((automatic = (namelen == 0)) || path[0] == '\0'))) {
+		if ((error = unp_abstract_capcheck(td)))
+			return (error);
+	}
+
+	if (automatic) {
+		/*
+		 * Automatic abstract names are NUL + 5 characters.  Add one
+		 * byte for the later snprintf() operation.
+		 */
+#define	AUTOFMT	"%05x"
+#define	AUTOLEN	sizeof("12345")
+		u_char sa_len = offsetof(struct sockaddr_un, sun_path) +
+		    AUTOLEN + 1;
+
+		soun = malloc(sa_len, M_SONAME, M_WAITOK | M_ZERO);
+		soun->sun_family = AF_UNIX;
+		soun->sun_len = sa_len - 1;
+		soun->sun_path[0] = '\0';
+	} else
+		soun = (struct sockaddr_un *)sodupsockaddr(nam, M_WAITOK);
 
 	/*
 	 * We don't allow simultaneous bind() calls on a single UNIX domain
@@ -621,14 +685,37 @@ uipc_bindat(int fd, struct socket *so, struct sockaddr *nam, struct thread *td)
 	 * also returns an error.  Not allowing re-binding simplifies the
 	 * implementation and avoids a great many possible failure modes.
 	 */
+	if (abstract)
+		UNP_ABSTRACT_WLOCK();
 	UNP_PCB_LOCK(unp);
-	if (unp->unp_vnode != NULL) {
-		UNP_PCB_UNLOCK(unp);
-		return (EINVAL);
+	if (unp->unp_addr != NULL) {
+		error = EINVAL;
+		goto error2;
 	}
 	if (unp->unp_flags & UNP_BINDING) {
+		error = EALREADY;
+		goto error2;
+	}
+	if (abstract) {
+		uint32_t n, start;
+
+		unp->unp_addr = soun;
+		if (automatic) {
+			n = start = arc4random() & 0xfffff;
+next_auto:
+			(void)snprintf(soun->sun_path + 1, AUTOLEN, AUTOFMT, n);
+		}
+		if (RB_INSERT(abstract_tree_t, &abstracts, unp) != NULL) {
+			if (automatic && (++n & 0xfffff) != start)
+				goto next_auto;
+			unp->unp_addr = NULL;
+			error = EADDRINUSE;
+			goto error2;
+		}
+		unp->unp_flags |= UNP_ABSTRACT;
+		UNP_ABSTRACT_WUNLOCK();
 		UNP_PCB_UNLOCK(unp);
-		return (EALREADY);
+		return (0);
 	}
 	unp->unp_flags |= UNP_BINDING;
 	mode = unp->unp_mode & ~td->td_proc->p_pd->pd_cmask;
@@ -692,8 +779,6 @@ restart:
 	}
 	vp = nd.ni_vp;
 	ASSERT_VOP_ELOCKED(vp, "uipc_bind");
-	soun = (struct sockaddr_un *)sodupsockaddr(nam, M_WAITOK);
-
 	UNP_PCB_LOCK(unp);
 	VOP_UNP_BIND(vp, unp);
 	unp->unp_vnode = vp;
@@ -707,10 +792,14 @@ restart:
 	return (0);
 
 error:
+	free(buf, M_TEMP);
 	UNP_PCB_LOCK(unp);
 	unp->unp_flags &= ~UNP_BINDING;
+error2:
+	if (abstract)
+		UNP_ABSTRACT_WUNLOCK();
 	UNP_PCB_UNLOCK(unp);
-	free(buf, M_TEMP);
+	free(soun, M_SONAME);
 	return (error);
 }
 
@@ -764,6 +853,7 @@ uipc_close(struct socket *so)
 	struct unpcb *unp, *unp2;
 	struct vnode *vp = NULL;
 	struct mtx *vplock;
+	bool abstract;
 
 	unp = sotounpcb(so);
 	KASSERT(unp != NULL, ("uipc_close: unp == NULL"));
@@ -773,19 +863,31 @@ uipc_close(struct socket *so)
 		vplock = mtx_pool_find(unp_vp_mtxpool, vp);
 		mtx_lock(vplock);
 	}
+	if ((abstract = (unp->unp_flags & UNP_ABSTRACT)))
+		UNP_ABSTRACT_WLOCK();
 	UNP_PCB_LOCK(unp);
-	if (vp && unp->unp_vnode == NULL) {
+	if (__predict_false(vp != NULL && unp->unp_vnode == NULL)) {
 		mtx_unlock(vplock);
 		vp = NULL;
+	}
+	if (__predict_false(abstract && !(unp->unp_flags & UNP_ABSTRACT))) {
+		UNP_ABSTRACT_WUNLOCK();
+		abstract = false;
 	}
 	if (vp != NULL) {
 		VOP_UNP_DETACH(vp);
 		unp->unp_vnode = NULL;
 	}
+	if (abstract) {
+		RB_REMOVE(abstract_tree_t, &abstracts, unp);
+		unp->unp_flags &= ~UNP_ABSTRACT;
+	}
 	if ((unp2 = unp_pcb_lock_peer(unp)) != NULL)
 		unp_disconnect(unp, unp2);
 	else
 		UNP_PCB_UNLOCK(unp);
+	if (abstract)
+		UNP_ABSTRACT_WUNLOCK();
 	if (vp) {
 		mtx_unlock(vplock);
 		vrele(vp);
@@ -805,7 +907,8 @@ uipc_chmod(struct socket *so, mode_t mode, struct ucred *cred __unused,
 	error = 0;
 	unp = sotounpcb(so);
 	UNP_PCB_LOCK(unp);
-	if (unp->unp_vnode != NULL || (unp->unp_flags & UNP_BINDING) != 0)
+	if (unp->unp_vnode != NULL ||
+	    (unp->unp_flags & (UNP_BINDING | UNP_ABSTRACT)) != 0)
 		error = EINVAL;
 	else
 		unp->unp_mode = mode;
@@ -2949,17 +3052,18 @@ unp_connectat(int fd, struct socket *so, const char *path, int len,
 {
 	struct socket *so2;
 	struct unpcb *unp, *unp2;
-	char buf[SOCK_MAXADDRLEN];
 	struct sockaddr_un *sa;
-	struct mtx *mtxp;
+	struct mtx *mtxp = NULL;
 	struct vnode *vp;
 	int error;
-	bool connreq;
+	bool connreq, abstract;
 
 	CURVNET_ASSERT_SET();
 
-	bcopy(path, buf, len);
-	buf[len] = 0;
+	if ((abstract = (len > 0 && path[0] == '\0'))) {
+		if ((error = unp_abstract_capcheck(td)))
+			return (error);
+	}
 
 	error = 0;
 	unp = sotounpcb(so);
@@ -3007,20 +3111,46 @@ unp_connectat(int fd, struct socket *so, const char *path, int len,
 	/*
 	 * Find the peer socket we're connecting to, and connect to it.
 	 *
+	 * An initial NUL byte marks an abstract name.
+	 *
 	 * If the peer is bound to a name in the filesystem, then we hold
 	 * the vnode pool lock until the connection is established, so as to
 	 * avoid racing with a close of the peer listening socket.  If the peer
 	 * is referenced by a file descriptor, then that reference prevents the
-	 * race, so no extra synchronization is needed.
+	 * race, so no extra synchronization is needed.  If we are connecting
+	 * to an abstract socket, then we hold read lock on the database until
+	 * completion.
 	 */
-	error = unp_connectat_peer(td, fd, buf, &so2, &mtxp, &vp);
+	if (abstract) {
+		struct sockaddr_un sun;
+
+		sun.sun_len = len + offsetof(struct sockaddr_un, sun_path);
+		memcpy(sun.sun_path, path, len);
+
+		UNP_ABSTRACT_RLOCK();
+		unp2 = RB_FIND(abstract_tree_t, &abstracts, (&(struct unpcb){
+		    .unp_socket = unp->unp_socket, .unp_addr = &sun }));
+		if (unp2 != NULL) {
+			so2 = unp2->unp_socket;
+			soref(so2);
+		} else {
+			UNP_ABSTRACT_RUNLOCK();
+			error = ECONNREFUSED;
+		}
+	} else {
+		char buf[SOCK_MAXADDRLEN];
+
+		memcpy(buf, path, len);
+		buf[len] = 0;
+		error = unp_connectat_peer(td, fd, buf, &so2, &mtxp, &vp);
+	}
 	if (__predict_false(error))
 		goto out;
 
 	if (so->so_type != so2->so_type) {
 		sorele(so2);
 		error = EPROTOTYPE;
-		goto out;
+		goto out2;
 	}
 
 	unp2 = sotounpcb(so2);
@@ -3088,6 +3218,8 @@ unp_connectat(int fd, struct socket *so, const char *path, int len,
 	}
 
 out2:
+	if (abstract)
+		UNP_ABSTRACT_RUNLOCK();
 	/*
 	 * Release references only after the pool lock is dropped in order to
 	 * avoid potential lock ordering issues.
@@ -3922,6 +4054,7 @@ unp_init(void *arg __unused)
 	UNP_LINK_LOCK_INIT();
 	UNP_DEFERRED_LOCK_INIT();
 	unp_vp_mtxpool = mtx_pool_create("unp vp mtxpool", 32, MTX_DEF);
+	rw_init(&unp_abstract_lock, "unix abstract");
 }
 SYSINIT(unp_init, SI_SUB_PROTO_DOMAIN, SI_ORDER_SECOND, unp_init, NULL);
 

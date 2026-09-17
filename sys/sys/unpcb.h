@@ -36,6 +36,7 @@ typedef uint64_t unp_gen_t;
 
 #if defined(_KERNEL) || defined(_WANT_UNPCB)
 #include <sys/queue.h>
+#include <sys/tree.h>
 #include <sys/ucred.h>
 
 /*
@@ -69,6 +70,7 @@ typedef uint64_t unp_gen_t;
  * (g) Locked using linkage lock
  * (l) Locked using list lock
  * (p) Locked using pcb lock
+ * (a) Locked abstract tree lock
  */
 LIST_HEAD(unp_head, unpcb);
 
@@ -94,7 +96,10 @@ struct unpcb {
 	u_int	unp_gcrefs;		/* (g) garbage collector refcount */
 	ino_t	unp_ino;		/* (g) fake inode number */
 	mode_t  unp_mode;		/* (g) initial pre-bind() mode */
-	LIST_ENTRY(unpcb) unp_dead;	/* (g) link in dead list */
+	union {
+		LIST_ENTRY(unpcb) unp_dead;	/* (g) link in dead list */
+		RB_ENTRY(unpcb)  unp_abstree;   /* (a) link in tree*/
+	};
 } __aligned(CACHE_LINE_SIZE);
 
 /*
@@ -118,6 +123,7 @@ struct unpcb {
 #define	UNP_CONNECTING			0x010	/* Currently connecting. */
 #define	UNP_BINDING			0x020	/* Currently binding. */
 #define	UNP_WAITING			0x040	/* Peer state is changing. */
+#define	UNP_ABSTRACT			0x080	/* Abstract bound. */
 
 /*
  * Flags in unp_gcflag.

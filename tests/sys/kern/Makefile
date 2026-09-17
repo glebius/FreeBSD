@@ -70,6 +70,7 @@ LIBADD.timerfd+=	pthread
 TEST_METADATA.timerfd+=	is_exclusive="true"
 ATF_TESTS_C+=	tty_pts
 ATF_TESTS_C+=	unix_connectat
+ATF_TESTS_C+=	unix_abstract
 ATF_TESTS_C+=	unix_dgram
 ATF_TESTS_C+=	unix_passfd_dgram
 TEST_METADATA.unix_passfd_dgram+=	is_exclusive="true"
