@@ -86,6 +86,7 @@ __buf_ring_enqueue(struct buf_ring *br, void *buf, bool return_empty)
 {
 	uint32_t prod_head, prod_next, prod_idx;
 	uint32_t cons_tail, mask;
+	bool empty;
 
 	mask = br->br_prod_mask;
 #ifdef DEBUG_BUFRING
@@ -141,10 +142,12 @@ __buf_ring_enqueue(struct buf_ring *br, void *buf, bool return_empty)
 	 */   
 	while (atomic_load_32(&br->br_prod_tail) != prod_head)
 		cpu_spinwait();
+	if (return_empty)
+		empty = (prod_head == atomic_load_acq_32(&br->br_cons_tail));
 	atomic_store_rel_32(&br->br_prod_tail, prod_next);
 	critical_exit();
 	if (return_empty)
-		return (prod_head == atomic_load_acq_32(&br->br_cons_head));
+		return (empty);
 	else
 		return (0);
 }
@@ -233,7 +236,7 @@ buf_ring_dequeue_sc(struct buf_ring *br)
 		return (NULL);
 
 	cons_idx = cons_head & mask;
-	atomic_store_rel_32(&br->br_cons_head, cons_next);
+	atomic_store_32(&br->br_cons_head, cons_next);
 	buf = br->br_ring[cons_idx];
 
 #ifdef DEBUG_BUFRING

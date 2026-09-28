@@ -37,6 +37,8 @@ struct intr_event;
 struct intr_thread;
 struct trapframe;
 
+void swi_net(void *arg);
+
 /*
  * Describe a hardware interrupt handler.
  *
@@ -131,6 +133,7 @@ struct intr_event {
 #define	IE_SOFT		0x000001	/* Software interrupt. */
 #define	IE_SLEEPABLE	0x000002	/* Sleepable ithread */
 #define	IE_ADDING_THREAD 0x000004	/* Currently building an ithread. */
+#define	IE_KTR		0x000008
 
 /* Flags to pass to swi_sched. */
 #define	SWI_FROMNMI	0x1

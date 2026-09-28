@@ -82,6 +82,7 @@
 #include <sys/socket.h>
 #include <sys/sysctl.h>
 #include <sys/systm.h>
+#include <sys/ktr.h>
 
 #include <net/if.h>
 #include <net/if_var.h>
@@ -686,7 +687,7 @@ netisr_select_nws(struct netisr_proto *npp, u_int dispatch_policy,
  * being direct dispatched, go back to sleep and wait for the dispatching
  * thread to wake us up again.
  */
-static void
+void
 swi_net(void *arg)
 {
 	struct netisr_workstream *nws = arg;
@@ -698,6 +699,7 @@ swi_net(void *arg)
 	    ("%s: device_polling but nws_count != 1", __func__));
 	netisr_poll();
 #endif
+	CTR1(KTR_SPARE4, "starting %p", nws->nws_swi_cookie);
 	NWS_LOCK(nws);
 again:
 	doagain = false;
@@ -735,6 +737,7 @@ again:
 			netisr_proto[proto].np_handler(m);
 			CURVNET_RESTORE();
 			if (handled >= np->np_qlimit) {
+				CTR1(KTR_SPARE4, "qlimit %p", nws->nws_swi_cookie);
 				doagain = true;
 				break;
 			}
@@ -746,6 +749,7 @@ again:
 	if (doagain)
 		goto again;
 	NWS_UNLOCK(nws);
+	CTR1(KTR_SPARE4, "finished %p", nws->nws_swi_cookie);
 #ifdef DEVICE_POLLING
 	netisr_pollmore();
 #endif
@@ -767,6 +771,7 @@ netisr_queue_internal(u_int proto, struct mbuf *m, u_int nws_id)
 	counter_u64_add(nw->nw_queued, 1);
 	if (error > 0) {
 		/* Ring was empty. */
+		CTR1(KTR_SPARE4, "swi_sched %p", nws->nws_swi_cookie);
 		NWS_SIGNAL(nws);
 		error = 0;
 	}

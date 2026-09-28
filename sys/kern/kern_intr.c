@@ -1003,8 +1003,8 @@ intr_event_schedule_thread(struct intr_event *ie, struct trapframe *frame)
 		if (PMC_HOOK_INSTALLED_ANY())
 			PMC_SOFT_CALL_INTR_HLPR(schedule, frame);
 #endif
-		CTR3(KTR_INTR, "%s: schedule pid %d (%s)", __func__, td->td_proc->p_pid,
-		    td->td_name);
+		if (ie->ie_flags & IE_KTR)
+			CTR4(KTR_SPARE4, "%s: schedule pid %d (%s) it %p", __func__, td->td_proc->p_pid, td->td_name, it);
 		TD_CLR_IWAIT(td);
 		sched_wakeup(td, SRQ_INTR);
 	} else {
@@ -1014,8 +1014,9 @@ intr_event_schedule_thread(struct intr_event *ie, struct trapframe *frame)
 		    (it->it_waiting >= intr_hwpmc_waiting_report_threshold))
 			PMC_SOFT_CALL_INTR_HLPR(waiting, frame);
 #endif
-		CTR5(KTR_INTR, "%s: pid %d (%s): it_need %d, state %d",
-		    __func__, td->td_proc->p_pid, td->td_name, it->it_need, TD_GET_STATE(td));
+		if (ie->ie_flags & IE_KTR)
+			CTR6(KTR_SPARE4, "%s: pid %d (%s): it %p it_need %d, state %d",
+		    __func__, td->td_proc->p_pid, td->td_name, it, it->it_need, TD_GET_STATE(td));
 		thread_unlock(td);
 	}
 
@@ -1065,6 +1066,8 @@ swi_add(struct intr_event **eventp, const char *name, driver_intr_t handler,
 		error = intr_event_add_handler(ie, name, NULL, handler, arg,
 		    PI_SWI(pri), flags, cookiep);
 	}
+	if (handler == swi_net)
+		ie->ie_flags |= 0x000008;
 	return (error);
 }
 
@@ -1171,8 +1174,11 @@ intr_event_execute_handlers(struct proc *p, struct intr_event *ie)
 		 * so a retry of the cmpset is not needed.
 		 */
 		if ((ie->ie_flags & IE_SOFT) != 0 &&
-		    atomic_cmpset_int(&ih->ih_need, 1, 0) == 0)
+		    atomic_cmpset_int(&ih->ih_need, 1, 0) == 0) {
+			if (ie->ie_flags & IE_KTR)
+				CTR1(KTR_SPARE4, "ih_need 0 @ %p", ih);
 			continue;
+		}
 
 		/* Execute this handler. */
 		CTR6(KTR_INTR, "%s: pid %d exec %p(%p) for %s flg=%x",
@@ -1310,13 +1316,22 @@ ithread_loop(void *arg)
 		    (ithd->it_flags & (IT_DEAD | IT_WAIT)) == 0) {
 			TD_SET_IWAIT(td);
 			ie->ie_count = 0;
+			if (ie->ie_flags & IE_KTR)
+				CTR1(KTR_SPARE4, "mi_switch %p", ithd);
 			mi_switch(SW_VOL | SWT_IWAIT);
+			if (ie->ie_flags & IE_KTR)
+				CTR1(KTR_SPARE4, "woke up %p", ithd);
 		} else if ((ithd->it_flags & IT_WAIT) != 0) {
 			ithd->it_flags &= ~IT_WAIT;
 			thread_unlock(td);
 			wakeup(ithd);
-		} else
+			if (ie->ie_flags & IE_KTR)
+				CTR1(KTR_SPARE4, "again 1 %p", ithd);
+		} else {
 			thread_unlock(td);
+			if (ie->ie_flags & IE_KTR)
+				CTR1(KTR_SPARE4, "again 2 %p", ithd);
+		}
 	}
 }
 
