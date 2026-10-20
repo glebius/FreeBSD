@@ -292,8 +292,6 @@ static int	uipc_connect2(struct socket *, struct socket *);
 static int	uipc_ctloutput(struct socket *, struct sockopt *);
 static int	unp_connectat(int, struct socket *, const char *, int,
 		    struct thread *, struct socket **);
-static int	unp_connect_peer(struct socket *, struct unpcb *,
-		    struct sockaddr **, struct thread *, bool);
 static int	unp_connectat_peer(struct thread *, int, const char *,
 		    struct socket **, struct mtx **, struct vnode **);
 static int	unp_vnode_peer(struct vnode *, struct thread *,
@@ -2933,28 +2931,26 @@ uipc_ctloutput(struct socket *so, struct sockopt *sopt)
  * (an empty path names the peer directly by descriptor), resolved relative to
  * descriptor 'fd' (AT_FDCWD for connect(2)).
  *
+ * To avoid LOR the unpcb is first marked with UNP_CONNECTING and its lock is
+ * dropped.  After that peer is looked up and appropriate references or locks
+ * are hold and the unpcb is locked again.
+ *
  * 'referenced_peerp' selects how the peer is returned.  If NULL, on exit the
  * peer's PCB is unlocked and the peer is unreferenced, symmetrically releasing
  * the resources acquired within the function.  If non-NULL, the peer's PCB is
  * returned locked and '*referenced_peerp' receives the referenced peer socket;
  * the caller is then responsible for first unlocking the peer's PCB and
- * afterwards releasing the socket.
- *
- * The reference is handed back rather than released in the return-unlocked
- * case, because releasing the last one under the PCB lock could cause
- * uipc_close() to try to re-acquire that lock.
- *
- * Note: the referenced_peerp mechanism is here only for the datagram fast-send
- * path, which enqueues under the peer's PCB lock.
+ * afterwards releasing the socket.  The referenced_peerp mechanism is here
+ * only for the datagram fast-send path, which enqueues under the peer's lock.
  */
 static int
 unp_connectat(int fd, struct socket *so, const char *path, int len,
     struct thread *td, struct socket **referenced_peerp)
 {
 	struct socket *so2;
-	struct unpcb *unp;
+	struct unpcb *unp, *unp2;
 	char buf[SOCK_MAXADDRLEN];
-	struct sockaddr *sa;
+	struct sockaddr_un *sa;
 	struct mtx *mtxp;
 	struct vnode *vp;
 	int error;
@@ -3018,31 +3014,93 @@ unp_connectat(int fd, struct socket *so, const char *path, int len,
 	 * race, so no extra synchronization is needed.
 	 */
 	error = unp_connectat_peer(td, fd, buf, &so2, &mtxp, &vp);
-	if (error == 0) {
-		error = unp_connect_peer(so, sotounpcb(so2), &sa, td,
-		    referenced_peerp != NULL);
-		if (error == 0 && referenced_peerp != NULL) {
-			*referenced_peerp = so2;
-			so2 = NULL;
-		}
+	if (__predict_false(error))
+		goto out;
 
-		/*
-		 * Release references only after the pool lock is dropped in
-		 * order to avoid potential lock ordering issues.
-		 */
-		if (mtxp != NULL) {
-			mtx_unlock(mtxp);
-			vput(vp);
-		}
-		if (so2 != NULL)
-			sorele(so2);
+	if (so->so_type != so2->so_type) {
+		sorele(so2);
+		error = EPROTOTYPE;
+		goto out;
 	}
 
+	unp2 = sotounpcb(so2);
+	if (connreq) {
+		struct socket *so3;
+		struct unpcb *unp3;
+
+		MPASS(referenced_peerp == NULL);
+
+		if (SOLISTENING(so2))
+			so3 = solisten_clone(so2);
+		else
+			so3 = NULL;
+		sorele(so2);
+		if (so3 == NULL) {
+			error = ECONNREFUSED;
+			goto out2;
+		}
+		if ((error = uipc_attach(so3, 0, NULL)) != 0) {
+			sodealloc(so3);
+			goto out2;
+		}
+		unp3 = sotounpcb(so3);
+		unp_pcb_lock_pair(unp2, unp3);
+		if (unp2->unp_addr != NULL) {
+			memcpy(sa, unp2->unp_addr, sizeof(struct sockaddr_un));
+			unp3->unp_addr = sa;
+			sa = NULL;
+		}
+
+		unp_copy_peercred(td, unp3, unp, unp2);
+
+		UNP_PCB_UNLOCK(unp2);
+
+		unp2 = unp3;
+		so2 = so3;
+
+		/*
+		 * It is safe to block on the PCB lock here since unp2 is
+		 * nascent and cannot be connected to any other sockets.
+		 */
+		UNP_PCB_LOCK(unp);
+#ifdef MAC
+		mac_socketpeer_set_from_socket(so, so2);
+		mac_socketpeer_set_from_socket(so2, so);
+#endif
+	} else {
+		unp_pcb_lock_pair(unp, unp2);
+	}
+	KASSERT(unp2 != NULL && so2 != NULL && unp2->unp_socket == so2 &&
+	    sotounpcb(so2) == unp2,
+	    ("%s: unp2 %p so2 %p", __func__, unp2, so2));
+	unp_connect2(so, so2, connreq);
+	if (connreq)
+		(void)solisten_enqueue(so2, SS_ISCONNECTED);
+	MPASS(unp->unp_flags & UNP_CONNECTING);
+	unp->unp_flags &= ~UNP_CONNECTING;
+	if (referenced_peerp != NULL) {
+		MPASS(!connreq);
+		*referenced_peerp = so2;
+	} else {
+		if (!connreq)
+			sorele(so2);
+		unp_pcb_unlock_pair(unp, unp2);
+	}
+
+out2:
+	/*
+	 * Release references only after the pool lock is dropped in order to
+	 * avoid potential lock ordering issues.
+	 */
+	if (mtxp != NULL) {
+		mtx_unlock(mtxp);
+		vput(vp);
+	}
+out:
 	free(sa, M_SONAME);
 	if (__predict_false(error)) {
 		UNP_PCB_LOCK(unp);
-		KASSERT((unp->unp_flags & UNP_CONNECTING) != 0,
-		    ("%s: unp %p has UNP_CONNECTING clear", __func__, unp));
+		MPASS(unp->unp_flags & UNP_CONNECTING);
 		unp->unp_flags &= ~UNP_CONNECTING;
 		UNP_PCB_UNLOCK(unp);
 	}
@@ -3226,83 +3284,6 @@ unp_vnode_peer(struct vnode *vp, struct thread *td, struct socket **so2p,
 fail:
 	vput(vp);
 	return (error);
-}
-
-/*
- * Second half of connecting a unix socket: 'so' is our connecting socket,
- * with UNP_CONNECTING set, and 'unp2' is the PCB of the peer named by the
- * caller, which must guarantee its stability (by holding a reference on the
- * peer socket, or the vnode lock plus unp_vp_mtxpool lock for a peer found
- * via VOP_UNP_CONNECT()).
- *
- * For connection-oriented sockets '*sap' points to a buffer to hold the
- * listener's address; it is consumed (set to NULL) if used.  On success
- * UNP_CONNECTING is cleared; on error the caller must clear it.
- */
-static int
-unp_connect_peer(struct socket *so, struct unpcb *unp2, struct sockaddr **sap,
-    struct thread *td, bool return_locked)
-{
-	struct socket *so2;
-	struct unpcb *unp, *unp3;
-	int error;
-	bool connreq;
-
-	unp = sotounpcb(so);
-	KASSERT(unp != NULL, ("%s: unp == NULL", __func__));
-	connreq = (so->so_proto->pr_flags & PR_CONNREQUIRED) != 0;
-
-	so2 = unp2->unp_socket;
-	if (so->so_type != so2->so_type)
-		return (EPROTOTYPE);
-	if (connreq) {
-		if (SOLISTENING(so2))
-			so2 = solisten_clone(so2);
-		else
-			so2 = NULL;
-		if (so2 == NULL)
-			return (ECONNREFUSED);
-		if ((error = uipc_attach(so2, 0, NULL)) != 0) {
-			sodealloc(so2);
-			return (error);
-		}
-		unp3 = sotounpcb(so2);
-		unp_pcb_lock_pair(unp2, unp3);
-		if (unp2->unp_addr != NULL) {
-			bcopy(unp2->unp_addr, *sap, unp2->unp_addr->sun_len);
-			unp3->unp_addr = (struct sockaddr_un *)*sap;
-			*sap = NULL;
-		}
-
-		unp_copy_peercred(td, unp3, unp, unp2);
-
-		UNP_PCB_UNLOCK(unp2);
-		unp2 = unp3;
-
-		/*
-		 * It is safe to block on the PCB lock here since unp2 is
-		 * nascent and cannot be connected to any other sockets.
-		 */
-		UNP_PCB_LOCK(unp);
-#ifdef MAC
-		mac_socketpeer_set_from_socket(so, so2);
-		mac_socketpeer_set_from_socket(so2, so);
-#endif
-	} else {
-		unp_pcb_lock_pair(unp, unp2);
-	}
-	KASSERT(unp2 != NULL && so2 != NULL && unp2->unp_socket == so2 &&
-	    sotounpcb(so2) == unp2,
-	    ("%s: unp2 %p so2 %p", __func__, unp2, so2));
-	unp_connect2(so, so2, connreq);
-	if (connreq)
-		(void)solisten_enqueue(so2, SS_ISCONNECTED);
-	KASSERT((unp->unp_flags & UNP_CONNECTING) != 0,
-	    ("%s: unp %p has UNP_CONNECTING clear", __func__, unp));
-	unp->unp_flags &= ~UNP_CONNECTING;
-	if (!return_locked)
-		unp_pcb_unlock_pair(unp, unp2);
-	return (0);
 }
 
 /*
